@@ -1,4 +1,4 @@
-One windows if for marlin compeling
+One windows is for marlin compeling
 The other one is for python coding
 
 Motorcontroller is main function, with a well settled class motorcontroller.
