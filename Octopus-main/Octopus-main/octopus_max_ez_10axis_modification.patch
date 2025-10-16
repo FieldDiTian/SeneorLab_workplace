@@ -1,0 +1,207 @@
+From: Marlin Configuration Expert
+Date: Thu, 3 Oct 2025 00:00:00 +0000
+Subject: [PATCH] Configure BIGTREETECH Octopus MAX EZ for 10-axis operation
+
+This patch configures Marlin firmware to run on BIGTREETECH Octopus MAX EZ
+(STM32H723) using all 10 motor sockets as 9 independent linear axes plus 1 extruder.
+
+Motor mapping:
+- Motor1 = X
+- Motor2 = Y  
+- Motor3 = Z
+- Motor4 = U
+- Motor5 = V
+- Motor6 = W
+- Motor7 = I
+- Motor8 = J
+- Motor9 = K
+- Motor10 = E0 (extruder)
+
+Changes include:
+- Set MOTHERBOARD to BOARD_BTT_OCTOPUS_MAX_EZ_V1_0
+- Set EXTRUDERS to 1
+- Disable temperature sensors (TEMP_SENSOR_0 = 0, TEMP_SENSOR_BED = 0)
+- Configure all 10 axes with TMC2209 drivers
+- Remap stepper pins for U,V,W,I,J,K axes to appropriate motor sockets
+- Update TMC UART communication pins for new axis mapping
+
+---
+ Marlin/Configuration.h                               | 15 +++++------
+ Marlin/src/pins/stm32h7/pins_BTT_OCTOPUS_MAX_EZ.h  | 28 ++++++++++----------
+ 2 files changed, 21 insertions(+), 22 deletions(-)
+
+diff --git a/Marlin/Configuration.h b/Marlin/Configuration.h
+index 6ce528b..da64fa9 100644
+--- a/Marlin/Configuration.h
++++ b/Marlin/Configuration.h
+@@ -88,7 +88,6 @@
+ 
+ // Choose the name from boards.h that matches your setup
+ #ifndef MOTHERBOARD
+-  // Updated to valid board ID from boards.h (BOARD_BTT_OCTOPUS_MAX_EZ_V1_0, id 6008)
+   #define MOTHERBOARD BOARD_BTT_OCTOPUS_MAX_EZ_V1_0
+ #endif
+ 
+@@ -170,15 +169,15 @@
+ //#define Z2_DRIVER_TYPE TMC2209
+ //#define Z3_DRIVER_TYPE A4988
+ //#define Z4_DRIVER_TYPE A4988
+-//#define I_DRIVER_TYPE  A4988
+-//#define J_DRIVER_TYPE  A4988
+-//#define K_DRIVER_TYPE  A4988
+-//#define U_DRIVER_TYPE  A4988
+-//#define V_DRIVER_TYPE  A4988
+-//#define W_DRIVER_TYPE  A4988
++#define U_DRIVER_TYPE  TMC2209
++#define V_DRIVER_TYPE  TMC2209
++#define W_DRIVER_TYPE  TMC2209
++#define I_DRIVER_TYPE  TMC2209
++#define J_DRIVER_TYPE  TMC2209
++#define K_DRIVER_TYPE  TMC2209
+ #define E0_DRIVER_TYPE TMC2209
+-#define E1_DRIVER_TYPE TMC2209
+-#define E2_DRIVER_TYPE TMC2209
++//#define E1_DRIVER_TYPE TMC2209
++//#define E2_DRIVER_TYPE TMC2209
+ //#define E3_DRIVER_TYPE TMC2209
+ //#define E4_DRIVER_TYPE TMC2209
+ //#define E5_DRIVER_TYPE TMC2209
+@@ -230,7 +229,7 @@
+ 
+ // This defines the number of extruders
+ // :[0, 1, 2, 3, 4, 5, 6, 7, 8]
+-#define EXTRUDERS 3
++#define EXTRUDERS 1
+ 
+ // Generally expected filament diameter (1.75, 2.85, 3.0, ...). Used for Volumetric, Filament Width Sensor, etc.
+ #define DEFAULT_NOMINAL_FILAMENT_DIA 1.75
+@@ -551,7 +550,7 @@
+  *   998 : Dummy Table that ALWAYS reads 25°C or the temperature defined below.
+  *   999 : Dummy Table that ALWAYS reads 100°C or the temperature defined below.
+  */
+-#define TEMP_SENSOR_0 998
++#define TEMP_SENSOR_0 0
+ #define TEMP_SENSOR_1 998
+ #define TEMP_SENSOR_2 998
+ #define TEMP_SENSOR_3 0
+
+diff --git a/Marlin/src/pins/stm32h7/pins_BTT_OCTOPUS_MAX_EZ.h b/Marlin/src/pins/stm32h7/pins_BTT_OCTOPUS_MAX_EZ.h
+index dc0ebd0..beb071d 100644
+--- a/Marlin/src/pins/stm32h7/pins_BTT_OCTOPUS_MAX_EZ.h
++++ b/Marlin/src/pins/stm32h7/pins_BTT_OCTOPUS_MAX_EZ.h
+@@ -181,53 +181,53 @@
+   #define Z_CS_PIN                          PG12
+ #endif
+ 
+-#define Z2_STEP_PIN                         PB8   // MOTOR 4
+-#define Z2_DIR_PIN                          PB9
+-#define Z2_ENABLE_PIN                       PB7
+-#ifndef Z2_CS_PIN
+-  #define Z2_CS_PIN                         PG11
++#define U_STEP_PIN                          PB8   // MOTOR 4
++#define U_DIR_PIN                           PB9
++#define U_ENABLE_PIN                        PB7
++#ifndef U_CS_PIN
++  #define U_CS_PIN                          PG11
+ #endif
+ 
+-#define E0_STEP_PIN                         PB5   // MOTOR 5
+-#define E0_DIR_PIN                          PB4
+-#define E0_ENABLE_PIN                       PB6
+-#ifndef E0_CS_PIN
+-  #define E0_CS_PIN                         PG10
++#define V_STEP_PIN                          PB5   // MOTOR 5
++#define V_DIR_PIN                           PB4
++#define V_ENABLE_PIN                        PB6
++#ifndef V_CS_PIN
++  #define V_CS_PIN                          PG10
+ #endif
+ 
+-#define E1_STEP_PIN                         PG15  // MOTOR 6
+-#define E1_DIR_PIN                          PB3
+-#define E1_ENABLE_PIN                       PD5
+-#ifndef E1_CS_PIN
+-  #define E1_CS_PIN                         PG9
++#define W_STEP_PIN                          PG15  // MOTOR 6
++#define W_DIR_PIN                           PB3
++#define W_ENABLE_PIN                        PD5
++#ifndef W_CS_PIN
++  #define W_CS_PIN                          PG9
+ #endif
+ 
+-#define E2_STEP_PIN                         PD3   // MOTOR 7
+-#define E2_DIR_PIN                          PD2
+-#define E2_ENABLE_PIN                       PD4
+-#ifndef E2_CS_PIN
+-  #define E2_CS_PIN                         PD7
++#define I_STEP_PIN                          PD3   // MOTOR 7
++#define I_DIR_PIN                           PD2
++#define I_ENABLE_PIN                        PD4
++#ifndef I_CS_PIN
++  #define I_CS_PIN                          PD7
+ #endif
+ 
+-#define E3_STEP_PIN                         PA10  // MOTOR 8
+-#define E3_DIR_PIN                          PA9
+-#define E3_ENABLE_PIN                       PA15
+-#ifndef E3_CS_PIN
+-  #define E3_CS_PIN                         PD6
++#define J_STEP_PIN                          PA10  // MOTOR 8
++#define J_DIR_PIN                           PA9
++#define J_ENABLE_PIN                        PA15
++#ifndef J_CS_PIN
++  #define J_CS_PIN                          PD6
+ #endif
+ 
+-#define E4_STEP_PIN                         PA8   // MOTOR 9
+-#define E4_DIR_PIN                          PC7
+-#define E4_ENABLE_PIN                       PC9
+-#ifndef E4_CS_PIN
+-  #define E4_CS_PIN                         PG8
++#define K_STEP_PIN                          PA8   // MOTOR 9
++#define K_DIR_PIN                           PC7
++#define K_ENABLE_PIN                        PC9
++#ifndef K_CS_PIN
++  #define K_CS_PIN                          PG8
+ #endif
+ 
+-#define E5_STEP_PIN                         PG6   // MOTOR 10
+-#define E5_DIR_PIN                          PC6
+-#define E5_ENABLE_PIN                       PC8
+-#ifndef E5_CS_PIN
+-  #define E5_CS_PIN                         PG7
++#define E0_STEP_PIN                         PG6   // MOTOR 10
++#define E0_DIR_PIN                          PC6
++#define E0_ENABLE_PIN                       PC8
++#ifndef E0_CS_PIN
++  #define E0_CS_PIN                         PG7
+ #endif
+ 
+ //
+@@ -327,15 +327,15 @@
+   #define X_SERIAL_TX_PIN                   PG14
+   #define Y_SERIAL_TX_PIN                   PG13
+   #define Z_SERIAL_TX_PIN                   PG12
+-  #define Z2_SERIAL_TX_PIN                  PG11
+-  #define E0_SERIAL_TX_PIN                  PG10
+-  #define E1_SERIAL_TX_PIN                  PG9
+-  #define E2_SERIAL_TX_PIN                  PD7
+-  #define E3_SERIAL_TX_PIN                  PD6
+-  #define E4_SERIAL_TX_PIN                  PG8
+-  #define E4_SERIAL_RX_PIN      E3_SERIAL_RX_PIN
+-  #define E5_SERIAL_TX_PIN                  PG7
+-  #define E5_SERIAL_RX_PIN      E3_SERIAL_RX_PIN
++  #define U_SERIAL_TX_PIN                   PG11
++  #define V_SERIAL_TX_PIN                   PG10
++  #define W_SERIAL_TX_PIN                   PG9
++  #define I_SERIAL_TX_PIN                   PD7
++  #define J_SERIAL_TX_PIN                   PD6
++  #define K_SERIAL_TX_PIN                   PG8
++  #define K_SERIAL_RX_PIN       J_SERIAL_RX_PIN
++  #define E0_SERIAL_TX_PIN                  PG7
++  #define E0_SERIAL_RX_PIN      J_SERIAL_RX_PIN
+ 
+   // Reduce baud rate to improve software serial reliability
+   #ifndef TMC_BAUD_RATE
+-- 
+2.39.0
