@@ -2,12 +2,17 @@ import serial
 import time
 
 class MotorController:
-    def __init__(self, port='COM8', baudrate=115200):
+    def __init__(self, port='COM8', baudrate=115200, auto_enable=True):
         # Remember connection params for possible reopen
         self.port = port
         self.baudrate = baudrate
         self.ser = serial.Serial(port, baudrate, timeout=2, write_timeout=2)
         time.sleep(2)  # Wait for board to initialize
+        
+        # 如果设置了auto_enable，自动启用步进电机
+        if auto_enable:
+            self.enable_steppers()
+            time.sleep(0.3)
 
         # Track positions for all motors (10 axes: X, Y, Z, I, J, K, U, V, W, E0)
         self.current_position = {
@@ -204,10 +209,10 @@ class MotorController:
 
 
 def main():
-    controller = MotorController()
+    # 使用默认参数创建控制器，自动启用步进电机
+    controller = MotorController()  # 已经自动启用步进电机
     try:
         print("\nInitializing...")
-        controller.enable_steppers()
         controller.send_gcode("M211 S0")  # Disable software endstops
         controller.set_absolute_positioning()
         controller.set_current_position(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)

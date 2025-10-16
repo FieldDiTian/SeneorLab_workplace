@@ -1,17 +1,13 @@
 from motorcontroller import MotorController
 import time
 
-PORT = 'COM8'
-BAUD = 115200
-
 # 要移动的距离（毫米）。如需 100mm，改为 100
 mm_distance = -1000
 feedrate = 1200  # mm/min，线性轴安全值
 
-mc = MotorController(port=PORT, baudrate=BAUD)
+# 使用默认参数创建控制器实例，自动启用步进电机
+mc = MotorController()
 try:
-    mc.enable_steppers()
-    time.sleep(0.3)
 
     # 计算步数（X轴 80 steps/mm）
     steps = int(round(mm_distance * mc.steps_per_mm['X']))
