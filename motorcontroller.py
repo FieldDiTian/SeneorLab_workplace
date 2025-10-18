@@ -74,19 +74,19 @@ class MotorController:
         }
 
         # Steps per mm configuration (from Marlin Configuration.h)
-        # DEFAULT_AXIS_STEPS_PER_UNIT: { 80, 80, 400, 80, 80, 80, 80, 80, 80, 500 }
+        # DEFAULT_AXIS_STEPS_PER_UNIT: { 100, 100, 100, 100, 100, 100, 100, 100, 100, 100 }
         # Order: X, Y, Z, I, J, K, U, V, W, E0
         self.steps_per_mm = {
-            'X': 80,   # Motor1
-            'Y': 80,   # Motor2
-            'Z': 80,   # Motor3
-            'I': 80,   # Motor7
-            'J': 80,   # Motor8
-            'K': 80,   # Motor9
-            'U': 80,   # Motor4
-            'V': 80,   # Motor5
-            'W': 80,   # Motor6
-            'E': 500   # Motor10 (E0 extruder)
+            'X': 100,   # Motor1
+            'Y': 100,   # Motor2
+            'Z': 100,   # Motor3
+            'I': 100,   # Motor7
+            'J': 100,   # Motor8
+            'K': 100,   # Motor9
+            'U': 100,   # Motor4
+            'V': 100,   # Motor5
+            'W': 100,   # Motor6
+            'E': 100    # Motor10 (E0 extruder)
         }
 
     def _find_available_ports(self):
