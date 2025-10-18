@@ -1,18 +1,69 @@
 import serial
 import time
+import glob
+import sys
+import os
 
 class MotorController:
-    def __init__(self, port='COM8', baudrate=115200, auto_enable=True):
-        # Remember connection params for possible reopen
-        self.port = port
+    def __init__(self, port=None, baudrate=115200, auto_enable=True):
+        # 自动检测端口（如果未指定）
         self.baudrate = baudrate
-        self.ser = serial.Serial(port, baudrate, timeout=2, write_timeout=2)
-        time.sleep(2)  # Wait for board to initialize
+        # 不再使用 M17 命令，避免设备断连问题
         
-        # 如果设置了auto_enable，自动启用步进电机
-        if auto_enable:
-            self.enable_steppers()
-            time.sleep(0.3)
+        if port is None:
+            print("未指定串口，尝试自动检测...")
+            available_ports = self._find_available_ports()
+            if not available_ports:
+                raise serial.SerialException("找不到可用的串口设备，请检查设备连接")
+            
+            self.port = available_ports[0]
+            print(f"自动选择串口: {self.port}")
+        else:
+            self.port = port
+            
+        # 连接到选定的串口
+        print(f"正在连接到 {self.port}，波特率 {baudrate}...")
+        try:
+            self.ser = serial.Serial(self.port, baudrate, timeout=2, write_timeout=2)
+            time.sleep(3)  # 增加等待时间，确保板子完全初始化
+            
+            # 发送一个简单命令测试连接
+            self._send_test_command()
+            
+            # 如果设置了auto_enable，准备步进电机（但不使用M17命令）
+            if auto_enable:
+                print("准备步进电机...")
+                # 使用安全的方式初始化步进电机状态
+                self.prepare_motors()
+                time.sleep(0.5)  # 等待稳定
+        except Exception as e:
+            print(f"连接失败: {e}")
+            print("尝试其他可用串口...")
+            success = False
+            
+            # 如果连接失败，尝试其他端口
+            if port is None and len(available_ports) > 1:
+                for alt_port in available_ports[1:]:
+                    try:
+                        print(f"尝试连接到 {alt_port}...")
+                        self.port = alt_port
+                        self.ser = serial.Serial(alt_port, baudrate, timeout=2, write_timeout=2)
+                        time.sleep(2)
+                        self._send_test_command()
+                        success = True
+                        
+                        if auto_enable:
+                            print("准备步进电机...")
+                            # 使用安全的方式初始化步进电机状态
+                            self.prepare_motors()
+                            time.sleep(0.5)
+                            
+                        break
+                    except Exception as alt_e:
+                        print(f"连接到 {alt_port} 失败: {alt_e}")
+                        
+            if not success and port is not None:
+                raise
 
         # Track positions for all motors (10 axes: X, Y, Z, I, J, K, U, V, W, E0)
         self.current_position = {
@@ -38,35 +89,121 @@ class MotorController:
             'E': 500   # Motor10 (E0 extruder)
         }
 
+    def _find_available_ports(self):
+        """查找系统上可用的串口设备"""
+        available_ports = []
+        
+        # 根据操作系统类型检测可能的串口
+        if sys.platform.startswith('win'):  # Windows
+            candidates = ['COM%s' % (i + 1) for i in range(256)]
+        elif sys.platform.startswith('linux') or sys.platform.startswith('cygwin'):  # Linux
+            candidates = glob.glob('/dev/tty[A-Za-z]*')
+        elif sys.platform.startswith('darwin'):  # macOS
+            # 在 macOS 上，检查 tty.* 和 cu.* 设备
+            candidates = glob.glob('/dev/tty.*') + glob.glob('/dev/cu.*')
+        else:
+            print(f"未知操作系统: {sys.platform}")
+            return []
+        
+        # 过滤掉明显不是 3D 打印机控制板的设备
+        for port in candidates:
+            # 跳过蓝牙和调试端口
+            if 'Bluetooth' in port or 'debug' in port or 'Dialin' in port:
+                continue
+                
+            try:
+                # 尝试打开串口以检查可用性
+                test_serial = serial.Serial(port, 115200, timeout=0.5)
+                test_serial.close()
+                available_ports.append(port)
+                print(f"找到可用串口: {port}")
+            except (OSError, serial.SerialException):
+                pass
+                
+        return available_ports
+        
+    def _send_test_command(self):
+        """发送简单的测试命令，确认通信正常"""
+        try:
+            # 清除缓冲区
+            self.ser.reset_input_buffer()
+            self.ser.reset_output_buffer()
+            
+            # 发送回显命令 M115 获取固件信息（通常是安全的命令）
+            print("发送测试命令 M115...")
+            self.ser.write("M115\r\n".encode())
+            self.ser.flush()
+            
+            # 等待回应
+            time.sleep(1)
+            response = b""
+            start_time = time.time()
+            while time.time() - start_time < 3:  # 最多等待3秒
+                if self.ser.in_waiting:
+                    response += self.ser.readline()
+                    if b"ok" in response.lower():
+                        break
+                time.sleep(0.1)
+            
+            # 打印收到的响应（用于调试）
+            if response:
+                print(f"收到响应: {response.decode('ascii', errors='ignore')}")
+            else:
+                print("警告: 未收到设备响应")
+                
+        except Exception as e:
+            print(f"测试命令发送失败: {e}")
+
     def _reopen(self):
         try:
             self.ser.close()
         except Exception:
             pass
-        time.sleep(0.3)
+        time.sleep(0.5)  # 增加等待时间
+        print(f"尝试重新连接到 {self.port}...")
         self.ser = serial.Serial(self.port, self.baudrate, timeout=2, write_timeout=2)
-        time.sleep(1.0)
+        time.sleep(1.5)  # 增加等待时间
 
     def send_gcode(self, cmd):
-        # print(f">> {cmd}")
+        print(f">> 发送命令: {cmd}")
         # Robust write with retry and CRLF line ending (some devices expect \r\n)
         payload = (cmd + "\r\n").encode(errors="ignore")
+        
+        # 在发送命令前先确保设备处于稳定状态
+        time.sleep(0.1)
+        
         for attempt in range(2):
             try:
-                # Clear any stale buffers before sending
+                # 每次发送前先清空缓冲区
                 try:
                     self.ser.reset_output_buffer()
                     self.ser.reset_input_buffer()
                 except Exception:
                     pass
-                self.ser.write(payload)
+                
+                # 增加一个小延迟，确保设备已准备好
+                time.sleep(0.2)
+                
+                # 写入数据并等待发送完成
+                bytes_written = self.ser.write(payload)
                 self.ser.flush()
+                
+                # 确认数据写入成功
+                if bytes_written == len(payload):
+                    print(f"命令已发送 ({bytes_written} 字节)")
+                else:
+                    print(f"警告: 只发送了 {bytes_written}/{len(payload)} 字节")
+                
+                # 命令发送后短暂等待
+                time.sleep(0.3)
                 break
+                
             except Exception as e:
                 if attempt == 0:
-                    print(f"[WARN] write failed on '{cmd}', attempting reopen... ({e})")
+                    print(f"[警告] 命令 '{cmd}' 发送失败，尝试重新连接... ({e})")
                     self._reopen()
                 else:
+                    print(f"[错误] 命令 '{cmd}' 发送失败: {e}")
                     raise
         response = []
         while True:
@@ -92,12 +229,40 @@ class MotorController:
                 continue
         return response
 
-    def enable_steppers(self):
-        self.send_gcode("M17")
+    def prepare_motors(self):
+        """准备步进电机状态，但不使用M17命令"""
+        print("准备步进电机状态...")
+        # 发送前先等待，确保连接稳定
         time.sleep(0.5)
+        
+        try:
+            # 获取当前状态信息
+            self.send_gcode("M119")  # 获取所有开关状态
+            time.sleep(0.5)
+            
+            # 获取当前位置
+            self.send_gcode("M114")  # 获取当前位置
+            time.sleep(0.5)
+            
+            # 设置绝对定位模式
+            self.send_gcode("G90")
+            time.sleep(0.5)
+            
+            print("步进电机准备就绪（将在首次移动时自动启用）")
+        except Exception as e:
+            print(f"准备步进电机状态时出错: {e}")
+            print("继续尝试...")
+            time.sleep(1.0)
 
     def disable_steppers(self):
-        self.send_gcode("M18")
+        """禁用所有步进电机（节省能源和减少热量）"""
+        print("禁用步进电机...")
+        try:
+            # M18 或 M84 命令可以禁用步进电机（两者效果相同）
+            self.send_gcode("M18")  # 或使用 M84
+            print("步进电机已禁用")
+        except Exception as e:
+            print(f"禁用步进电机时出错: {e}")
         time.sleep(0.5)
 
     def set_absolute_positioning(self):
@@ -105,8 +270,19 @@ class MotorController:
         time.sleep(0.5)
 
     def set_relative_positioning(self):
-        self.send_gcode("G91")
-        time.sleep(0.5)
+        print("设置相对定位模式...")
+        # 先确保通信稳定
+        try:
+            # 先发送一个简单的查询命令
+            self.send_gcode("M114")  # 查询位置
+            # 然后设置相对定位
+            self.send_gcode("G91")
+            time.sleep(0.8)  # 增加等待时间
+            print("相对定位模式设置成功")
+            return True
+        except Exception as e:
+            print(f"设置相对定位模式失败: {e}")
+            return False
 
     def set_current_position(self, x=0, y=0, z=0, i=0, j=0, k=0, u=0, v=0, w=0, e=0):
         """Set the current position for all 10 axes."""
