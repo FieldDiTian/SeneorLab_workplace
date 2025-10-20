@@ -1,3 +1,17 @@
+#!/usr/bin/env python3
+"""
+增强版电机控制器 (简化版) / Enhanced Motor Controller (Simplified Version)
+
+这个控制器扩展了原有的MotorController功能，为每个轴提供单独的移动方法，
+简化了运动控制，并集成了安全机制。专注于相对移动，无需位置报告。
+只提供单轴移动功能，确保最大的兼容性和可靠性。
+
+This controller extends the original MotorController functionality, providing individual 
+movement methods for each axis, simplifying motion control, and integrating safety mechanisms. 
+Focuses on relative movement without position reporting. Only provides single-axis movement 
+functionality to ensure maximum compatibility and reliability.
+"""
+
 import serial
 import time
 import glob
@@ -5,442 +19,428 @@ import sys
 import os
 
 class MotorController:
-    def __init__(self, port=None, baudrate=115200, auto_enable=True):
-        # 自动检测端口（如果未指定）
-        self.baudrate = baudrate
-        # 不再使用 M17 命令，避免设备断连问题
+    def __init__(self, port=None, baudrate=115200, auto_enable=True, default_feedrate=1000, wait_time=0.5):
+        """
+        初始化电机控制器 / Initialize Motor Controller
         
+        参数 / Parameters:
+        - port: 串口路径，如果为None则自动检测 / Serial port path, auto-detect if None
+        - baudrate: 波特率，默认115200 / Baud rate, default 115200
+        - auto_enable: 是否自动启用步进电机 / Whether to auto-enable stepper motors
+        - default_feedrate: 默认进给速度(mm/min) / Default feed rate (mm/min)
+        - wait_time: 默认运动后等待时间(秒) / Default wait time after movement (seconds)
+        """
+        # 保存设置
+        self.baudrate = baudrate
+        self.default_feedrate = default_feedrate
+        self.wait_time = wait_time
+        self.is_connected = False
+        self.ser = None
+        
+        # 自动检测端口（如果未指定）
         if port is None:
-            print("未指定串口，尝试自动检测...")
+            print("未指定串口，尝试自动检测... / Serial port not specified, attempting auto-detection...")
             available_ports = self._find_available_ports()
             if not available_ports:
-                raise serial.SerialException("找不到可用的串口设备，请检查设备连接")
+                raise serial.SerialException("找不到可用的串口设备，请检查设备连接 / Cannot find available serial devices, please check device connection")
             
+            # 使用第一个检测到的端口（优先USB模块端口）
             self.port = available_ports[0]
-            print(f"自动选择串口: {self.port}")
-        else:
-            self.port = port
+            print(f"自动选择串口 / Auto-selected serial port: {self.port}")
             
-        # 连接到选定的串口
-        print(f"正在连接到 {self.port}，波特率 {baudrate}...")
-        try:
-            self.ser = serial.Serial(self.port, baudrate, timeout=2, write_timeout=2)
-            time.sleep(3)  # 增加等待时间，确保板子完全初始化
+            # 连接到选定的串口
+            self._connect_to_port(self.port)
             
-            # 发送一个简单命令测试连接
-            self._send_test_command()
-            
-            # 如果设置了auto_enable，准备步进电机（但不使用M17命令）
-            if auto_enable:
-                print("准备步进电机...")
-                # 使用安全的方式初始化步进电机状态
-                self.prepare_motors()
-                time.sleep(0.5)  # 等待稳定
-        except Exception as e:
-            print(f"连接失败: {e}")
-            print("尝试其他可用串口...")
-            success = False
-            
-            # 如果连接失败，尝试其他端口
-            if port is None and len(available_ports) > 1:
+            # 如果首选端口连接失败，尝试其他端口
+            if not self.is_connected and len(available_ports) > 1:
+                print("首选端口连接失败，尝试其他端口... / Primary port connection failed, trying other ports...")
                 for alt_port in available_ports[1:]:
-                    try:
-                        print(f"尝试连接到 {alt_port}...")
+                    print(f"尝试备选端口 / Trying alternative port: {alt_port}")
+                    self._connect_to_port(alt_port)
+                    if self.is_connected:
                         self.port = alt_port
-                        self.ser = serial.Serial(alt_port, baudrate, timeout=2, write_timeout=2)
-                        time.sleep(2)
-                        self._send_test_command()
-                        success = True
-                        
-                        if auto_enable:
-                            print("准备步进电机...")
-                            # 使用安全的方式初始化步进电机状态
-                            self.prepare_motors()
-                            time.sleep(0.5)
-                            
+                        print(f"成功连接到备选端口 / Successfully connected to alternative port: {alt_port}")
                         break
-                    except Exception as alt_e:
-                        print(f"连接到 {alt_port} 失败: {alt_e}")
-                        
-            if not success and port is not None:
-                raise
-
-        # Track positions for all motors (10 axes: X, Y, Z, I, J, K, U, V, W, E0)
-        self.current_position = {
-            'X': 0, 'Y': 0, 'Z': 0,
-            'I': 0, 'J': 0, 'K': 0,
-            'U': 0, 'V': 0, 'W': 0,
-            'E': 0  # E0 only
-        }
-
-        # Steps per mm configuration (from Marlin Configuration.h)
-        # DEFAULT_AXIS_STEPS_PER_UNIT: { 100, 100, 100, 100, 100, 100, 100, 100, 100, 100 }
-        # Order: X, Y, Z, I, J, K, U, V, W, E0
+        else:
+            # 直接使用指定的端口
+            self.port = port
+            print(f"使用指定串口 / Using specified serial port: {self.port}")
+            self._connect_to_port(self.port)
+            
+        # 检查连接状态
+        if not self.is_connected or not self.ser:
+            raise serial.SerialException("无法连接到任何可用的串口设备，请检查连接或手动指定端口 / Cannot connect to any available serial device, please check connection or manually specify port")
+            
+        # 如果设置了auto_enable，准备步进电机
+        if auto_enable:
+            print("准备步进电机... / Preparing stepper motors...")
+            self.prepare_motors()
+            time.sleep(0.5)  # 等待稳定 / Wait for stabilization
+        
+        # Steps per mm configuration (统一设置为100步/毫米)
         self.steps_per_mm = {
-            'X': 100,   # Motor1
-            'Y': 100,   # Motor2
-            'Z': 100,   # Motor3
-            'I': 100,   # Motor7
-            'J': 100,   # Motor8
-            'K': 100,   # Motor9
-            'U': 100,   # Motor4
-            'V': 100,   # Motor5
-            'W': 100,   # Motor6
-            'E': 100    # Motor10 (E0 extruder)
+            'X': 100,  # Motor1
+            'Y': 100,  # Motor2
+            'Z': 100,  # Motor3
+            'I': 100,  # Motor7
+            'J': 100,  # Motor8
+            'K': 100,  # Motor9
+            'U': 100,  # Motor4
+            'V': 100,  # Motor5
+            'W': 100,  # Motor6
+            'E': 100   # Motor10 (E0 extruder)
         }
+        
+        # 设置为相对移动模式
+        self.set_relative_positioning()
 
     def _find_available_ports(self):
-        """查找系统上可用的串口设备"""
+        """查找系统上可用的串口设备 / Find available serial devices on the system"""
         available_ports = []
+        preferred_ports = []
         
         # 根据操作系统类型检测可能的串口
         if sys.platform.startswith('win'):  # Windows
             candidates = ['COM%s' % (i + 1) for i in range(256)]
         elif sys.platform.startswith('linux') or sys.platform.startswith('cygwin'):  # Linux
             candidates = glob.glob('/dev/tty[A-Za-z]*')
-        elif sys.platform.startswith('darwin'):  # macOS
-            # 在 macOS 上，检查 tty.* 和 cu.* 设备
+        elif sys.platform.startswith('darwin'):  # MacOS
             candidates = glob.glob('/dev/tty.*') + glob.glob('/dev/cu.*')
         else:
-            print(f"未知操作系统: {sys.platform}")
-            return []
+            raise EnvironmentError('不支持的操作系统 / Unsupported operating system')
         
-        # 过滤掉明显不是 3D 打印机控制板的设备
+        # 尝试打开每个候选端口
         for port in candidates:
-            # 跳过蓝牙和调试端口
-            if 'Bluetooth' in port or 'debug' in port or 'Dialin' in port:
-                continue
-                
             try:
-                # 尝试打开串口以检查可用性
-                test_serial = serial.Serial(port, 115200, timeout=0.5)
-                test_serial.close()
-                available_ports.append(port)
-                print(f"找到可用串口: {port}")
+                # 跳过不需要的设备
+                if any(skip in port for skip in ['Bluetooth', 'debug-console', 'Dialin']):
+                    continue
+                
+                # 检查端口是否可用
+                s = serial.Serial(port, 115200, timeout=0.1)
+                s.close()
+                
+                # 将USB模块设备(usbmodem)添加到首选端口列表
+                if 'usbmodem' in port:
+                    preferred_ports.append(port)
+                    print(f"找到USB设备端口 / Found USB device port: {port}")
+                else:
+                    available_ports.append(port)
             except (OSError, serial.SerialException):
                 pass
-                
-        return available_ports
         
-    def _send_test_command(self):
-        """发送简单的测试命令，确认通信正常"""
+        # 首先返回USB模块端口，然后是其他可用端口
+        all_ports = preferred_ports + available_ports
+        print(f"发现可用端口 / Discovered available ports: {all_ports}")
+        
+        if not all_ports:
+            print("警告: 未找到可用的串口设备 / Warning: No available serial devices found")
+            
+        return all_ports
+    
+    def _connect_to_port(self, port):
+        """连接到指定的串口 / Connect to specified serial port"""
         try:
-            # 清除缓冲区
+            print(f"正在连接到 / Connecting to {port}，波特率 / baudrate {self.baudrate}...")
+            self.ser = serial.Serial(port, self.baudrate, timeout=2, write_timeout=2)
+            time.sleep(3)  # 增加等待时间，确保板子完全初始化 / Wait longer to ensure board is fully initialized
+            
+            # 发送一个简单命令测试连接，并验证是否是Marlin固件
+            response = self._send_test_command()
+            
+            # 验证是否收到了Marlin固件的响应
+            if response and ('FIRMWARE_NAME:Marlin' in response or 'ok' in response.lower()):
+                self.is_connected = True
+                print(f"成功连接到 / Successfully connected to {port} (Marlin固件已验证 / Marlin firmware verified)")
+            else:
+                print(f"警告 / Warning: {port} 未返回有效的Marlin固件响应 / did not return valid Marlin firmware response")
+                self.is_connected = False
+                
+        except Exception as e:
+            print(f"连接 / Connection to {port} 失败 / failed: {e}")
+            self.is_connected = False
+    
+    def _try_alternative_ports(self, available_ports):
+        """尝试连接到备选端口 / Try connecting to alternative ports"""
+        if len(available_ports) > 1:
+            print("尝试其他可用串口... / Trying other available serial ports...")
+            for alt_port in available_ports[1:]:
+                self._connect_to_port(alt_port)
+                if self.is_connected:
+                    self.port = alt_port
+                    return
+    
+    def _send_test_command(self):
+        """发送测试命令确认连接，返回响应字符串 / Send test command to confirm connection, return response string"""
+        try:
+            # 清空缓冲区 / Clear buffer
             self.ser.reset_input_buffer()
             self.ser.reset_output_buffer()
             
-            # 发送回显命令 M115 获取固件信息（通常是安全的命令）
-            print("发送测试命令 M115...")
-            self.ser.write("M115\r\n".encode())
+            # 发送M115命令获取固件信息 / Send M115 command to get firmware info
+            print("发送 / Sending: M115")
+            self.ser.write("M115\n".encode())
             self.ser.flush()
             
-            # 等待回应
+            # 等待响应 / Wait for response
             time.sleep(1)
-            response = b""
+            response = ""
             start_time = time.time()
-            while time.time() - start_time < 3:  # 最多等待3秒
+            while time.time() - start_time < 2:  # 最多等待2秒 / Wait max 2 seconds
                 if self.ser.in_waiting:
-                    response += self.ser.readline()
-                    if b"ok" in response.lower():
+                    response += self.ser.read(self.ser.in_waiting).decode(errors='ignore')
+                    if 'ok' in response.lower() or 'FIRMWARE_NAME:Marlin' in response:
                         break
                 time.sleep(0.1)
             
-            # 打印收到的响应（用于调试）
             if response:
-                print(f"收到响应: {response.decode('ascii', errors='ignore')}")
+                print(f"接收 / Received: {response.strip()}")
             else:
-                print("警告: 未收到设备响应")
+                print("警告: 未收到响应 / Warning: No response received")
                 
+            return response
+            
         except Exception as e:
-            print(f"测试命令发送失败: {e}")
-
-    def _reopen(self):
-        try:
+            print(f"发送测试命令时出错 / Error sending test command: {e}")
+            return ""
+    
+    def close(self):
+        """关闭串口连接 / Close serial port connection"""
+        if hasattr(self, 'ser') and self.ser.is_open:
             self.ser.close()
-        except Exception:
-            pass
-        time.sleep(0.5)  # 增加等待时间
-        print(f"尝试重新连接到 {self.port}...")
-        self.ser = serial.Serial(self.port, self.baudrate, timeout=2, write_timeout=2)
-        time.sleep(1.5)  # 增加等待时间
-
-    def send_gcode(self, cmd):
-        print(f">> 发送命令: {cmd}")
-        # Robust write with retry and CRLF line ending (some devices expect \r\n)
-        payload = (cmd + "\r\n").encode(errors="ignore")
+            print("串口连接已关闭 / Serial port connection closed")
+    
+    def send_gcode(self, command):
+        """发送G-code命令到控制器 / Send G-code command to controller"""
+        if not hasattr(self, 'ser') or not self.ser or not self.ser.is_open:
+            raise serial.SerialException("串口未连接或已关闭 / Serial port not connected or closed")
         
-        # 在发送命令前先确保设备处于稳定状态
-        time.sleep(0.1)
+        # 准备命令 / Prepare command
+        command = command.strip()
+        print(f"发送 / Sending: {command}")
         
-        for attempt in range(2):
+        # 添加换行符并尝试发送，带重试 / Add newline and try to send with retry
+        command += "\n"
+        
+        for attempt in range(2):  # 最多尝试2次 / Try max 2 times
             try:
-                # 每次发送前先清空缓冲区
-                try:
-                    self.ser.reset_output_buffer()
-                    self.ser.reset_input_buffer()
-                except Exception:
-                    pass
+                # 清空缓冲区 / Clear buffer
+                self.ser.reset_input_buffer()
+                self.ser.reset_output_buffer()
                 
-                # 增加一个小延迟，确保设备已准备好
-                time.sleep(0.2)
-                
-                # 写入数据并等待发送完成
-                bytes_written = self.ser.write(payload)
+                # 发送命令 / Send command
+                bytes_written = self.ser.write(command.encode())
                 self.ser.flush()
                 
-                # 确认数据写入成功
-                if bytes_written == len(payload):
-                    print(f"命令已发送 ({bytes_written} 字节)")
-                else:
-                    print(f"警告: 只发送了 {bytes_written}/{len(payload)} 字节")
+                if bytes_written != len(command):
+                    print(f"警告: 只发送了 / Warning: Only sent {bytes_written}/{len(command)} 字节 / bytes")
                 
-                # 命令发送后短暂等待
-                time.sleep(0.3)
-                break
+                # 等待并读取响应 / Wait and read response
+                time.sleep(0.2)  # 稍微等待，确保有时间接收响应 / Wait briefly to ensure time to receive response
+                response = ""
+                start_time = time.time()
+                
+                # 最多等待1秒获取完整响应 / Wait max 1 second for complete response
+                while time.time() - start_time < 1:
+                    if self.ser.in_waiting:
+                        chunk = self.ser.read(self.ser.in_waiting).decode(errors='ignore')
+                        response += chunk
+                        if 'ok' in response.lower():
+                            break  # 收到ok回复，可以结束了 / Received ok reply, can finish
+                    time.sleep(0.1)
+                
+                if response:
+                    print(f"接收 / Received: {response.strip()}")
+                
+                return response
                 
             except Exception as e:
-                if attempt == 0:
-                    print(f"[警告] 命令 '{cmd}' 发送失败，尝试重新连接... ({e})")
-                    self._reopen()
+                if attempt == 0:  # 第一次尝试失败，重试一次 / First attempt failed, retry once
+                    print(f"发送命令时出错，重试中 / Error sending command, retrying: {e}")
+                    time.sleep(0.5)
                 else:
-                    print(f"[错误] 命令 '{cmd}' 发送失败: {e}")
+                    print(f"发送命令失败 / Command sending failed: {e}")
                     raise
-        response = []
-        while True:
-            line = self.ser.readline().decode(errors="ignore").strip()
-            if line:
-                # print(f"<< {line}")
-                response.append(line)
-                if line.startswith("X:"):
-                    try:
-                        parts = line.split()
-                        for part in parts:
-                            if ':' in part:
-                                name, value = part.split(':')
-                                if name in self.current_position:
-                                    self.current_position[name] = float(value)
-                    except Exception as e:
-                        print(f"Error parsing position: {e}")
-            # Typical Marlin replies include 'ok'. Some firmwares may send 'wait' periodically.
-            if line.lower().startswith("ok"):
-                break
-            if line.lower().startswith("wait"):
-                # Keep waiting for the actual 'ok' after moves
-                continue
-        return response
-
+    
     def prepare_motors(self):
-        """准备步进电机状态，但不使用M17命令"""
-        print("准备步进电机状态...")
-        # 发送前先等待，确保连接稳定
-        time.sleep(0.5)
-        
-        try:
-            # 获取当前状态信息
-            self.send_gcode("M119")  # 获取所有开关状态
-            time.sleep(0.5)
-            
-            # 获取当前位置
-            self.send_gcode("M114")  # 获取当前位置
-            time.sleep(0.5)
-            
-            # 设置绝对定位模式
-            self.send_gcode("G90")
-            time.sleep(0.5)
-            
-            print("步进电机准备就绪（将在首次移动时自动启用）")
-        except Exception as e:
-            print(f"准备步进电机状态时出错: {e}")
-            print("继续尝试...")
-            time.sleep(1.0)
-
+        # 相对模式 (G91) / Return to relative mode (G91)
+        print("相对模式 (G91) / Return to relative mode (G91)")
+        self.send_gcode("G91")
+    
     def disable_steppers(self):
-        """禁用所有步进电机（节省能源和减少热量）"""
-        print("禁用步进电机...")
-        try:
-            # M18 或 M84 命令可以禁用步进电机（两者效果相同）
-            self.send_gcode("M18")  # 或使用 M84
-            print("步进电机已禁用")
-        except Exception as e:
-            print(f"禁用步进电机时出错: {e}")
-        time.sleep(0.5)
-
-    def set_absolute_positioning(self):
-        self.send_gcode("G90")
-        time.sleep(0.5)
-
+        """禁用所有步进电机 (M18/M84) / Disable all stepper motors (M18/M84)"""
+        print("禁用步进电机... / Disabling stepper motors...")
+        self.send_gcode("M18")  # 或者使用 M84 / Or use M84
+    
     def set_relative_positioning(self):
-        print("设置相对定位模式...")
-        # 先确保通信稳定
-        try:
-            # 先发送一个简单的查询命令
-            self.send_gcode("M114")  # 查询位置
-            # 然后设置相对定位
-            self.send_gcode("G91")
-            time.sleep(0.8)  # 增加等待时间
-            print("相对定位模式设置成功")
-            return True
-        except Exception as e:
-            print(f"设置相对定位模式失败: {e}")
-            return False
-
-    def set_current_position(self, x=0, y=0, z=0, i=0, j=0, k=0, u=0, v=0, w=0, e=0):
-        """Set the current position for all 10 axes."""
-        cmd = f"G92 X{x} Y{y} Z{z} I{i} J{j} K{k} U{u} V{v} W{w} E{e}"
+        """设置为相对定位模式 (G91) / Set to relative positioning mode (G91)"""
+        print("设置相对定位模式... / Setting relative positioning mode...")
+        self.send_gcode("G91")  # 相对坐标模式 / Relative coordinate mode
+        # 同时设置挤出机为相对模式 / Also set extruder to relative mode
+        self.send_gcode("M83")
+    
+    def set_absolute_positioning(self):
+        """设置为绝对定位模式 (G90) / Set to absolute positioning mode (G90)"""
+        print("设置绝对定位模式... / Setting absolute positioning mode...")
+        self.send_gcode("G90")  # 绝对坐标模式 / Absolute coordinate mode
+        # 同时设置挤出机为绝对模式 / Also set extruder to absolute mode
+        self.send_gcode("M82")
+    
+    def wait_for_movement(self):
+        """等待所有移动完成 (M400) / Wait for all movements to complete (M400)"""
+        self.send_gcode("M400")
+        time.sleep(self.wait_time)  # 额外等待确保稳定 / Extra wait to ensure stability
+    
+    def move_axis(self, axis, distance, feedrate=None, wait=True):
+        """
+        移动指定轴指定距离 / Move specified axis by specified distance
+        
+        参数 / Parameters:
+        - axis: 轴名称 / Axis name ('X', 'Y', 'Z', 'I', 'J', 'K', 'U', 'V', 'W', 'E')
+        - distance: 移动距离 (毫米) / Movement distance (millimeters)
+        - feedrate: 进给速度 (毫米/分钟)，如果为None则使用默认值 / Feed rate (mm/min), use default if None
+        - wait: 是否等待移动完成 / Whether to wait for movement to complete
+        """
+        valid_axes = ['X', 'Y', 'Z', 'I', 'J', 'K', 'U', 'V', 'W', 'E']
+        if axis not in valid_axes:
+            raise ValueError(f"无效轴 / Invalid axis: {axis}. 必须是以下之一 / Must be one of: {', '.join(valid_axes)}")
+        
+        if feedrate is None:
+            feedrate = self.default_feedrate
+        
+        # 确保在相对模式下 / Ensure in relative mode
+        self.set_relative_positioning()
+        
+        # 如果是E轴，先选择挤出机0 / If E axis, select extruder 0 first
+        if axis == 'E':
+            self.select_extruder(0)
+            
+        # 执行移动命令 / Execute movement command
+        cmd = f"G1 {axis}{distance:.4f} F{feedrate}"
+        print(f"\n移动 / Moving {axis}轴 / axis {distance}mm (速度 / speed: {feedrate}mm/min)...")
         self.send_gcode(cmd)
-        time.sleep(0.5)
-        self.get_position()
-
-    def get_position(self):
-        self.send_gcode("M114")
-        #print("Current position:")
-        #for axis, value in self.current_position.items():
-            #print(f"  {axis}: {value:.2f}")
-        return self.current_position
-
+        
+        # 等待移动完成 / Wait for movement to complete
+        if wait:
+            self.wait_for_movement()
+    
+    # === 以下为每个轴的专用移动方法 / Following are dedicated movement methods for each axis ===
+    
+    def move_x(self, distance, feedrate=None, wait=True):
+        """移动X轴指定距离 / Move X-axis by specified distance"""
+        self.move_axis('X', distance, feedrate, wait)
+    
+    def move_y(self, distance, feedrate=None, wait=True):
+        """移动Y轴指定距离 / Move Y-axis by specified distance"""
+        self.move_axis('Y', distance, feedrate, wait)
+    
+    def move_z(self, distance, feedrate=None, wait=True):
+        """移动Z轴指定距离 / Move Z-axis by specified distance"""
+        self.move_axis('Z', distance, feedrate, wait)
+    
+    def move_i(self, distance, feedrate=None, wait=True):
+        """移动I轴指定距离 / Move I-axis by specified distance"""
+        self.move_axis('I', distance, feedrate, wait)
+    
+    def move_j(self, distance, feedrate=None, wait=True):
+        """移动J轴指定距离 / Move J-axis by specified distance"""
+        self.move_axis('J', distance, feedrate, wait)
+    
+    def move_k(self, distance, feedrate=None, wait=True):
+        """移动K轴指定距离 / Move K-axis by specified distance"""
+        self.move_axis('K', distance, feedrate, wait)
+    
+    def move_u(self, distance, feedrate=None, wait=True):
+        """移动U轴指定距离 / Move U-axis by specified distance"""
+        self.move_axis('U', distance, feedrate, wait)
+    
+    def move_v(self, distance, feedrate=None, wait=True):
+        """移动V轴指定距离 / Move V-axis by specified distance"""
+        self.move_axis('V', distance, feedrate, wait)
+    
+    def move_w(self, distance, feedrate=None, wait=True):
+        """移动W轴指定距离 / Move W-axis by specified distance"""
+        self.move_axis('W', distance, feedrate, wait)
+    
+    def move_e(self, distance, feedrate=None, wait=True):
+        """移动E轴(挤出机)指定距离 / Move E-axis (extruder) by specified distance"""
+        self.move_axis('E', distance, feedrate, wait)
+    
     def select_extruder(self, index=0):
-        """Select extruder tool (T command)."""
+        """选择挤出机 (T命令) / Select extruder (T command)"""
         self.send_gcode(f"T{index}")
         time.sleep(0.2)
-
-    def move_motor_by_steps(self, motor_name, step_count, feedrate=1000):
-        """Move a specified motor by step count."""
-        valid_motors = ['X', 'Y', 'Z', 'I', 'J', 'K', 'U', 'V', 'W', 'E']
-        if motor_name not in valid_motors:
-            raise ValueError(f"Invalid motor: {motor_name}. Must be one of: {', '.join(valid_motors)}")
-
-        mm = step_count / self.steps_per_mm[motor_name]
-
-        # For E axis, select extruder first (T0 for single extruder)
-        if motor_name == 'E':
-            self.select_extruder(0)  # 选择挤出机0
-            axis = 'E'
-        else:
-            axis = motor_name
-
-        self.set_relative_positioning()
-        gcode = f"G1 {axis}{mm:.4f} F{feedrate}"
-        print(f"\nMoving {motor_name} by {step_count} steps ({mm:.3f} mm)...")
-        self.send_gcode(gcode)
-        time.sleep(1)
-        # return self.get_position()
-
-    def move_to(self, x=None, y=None, z=None, i=None, j=None, k=None, u=None, v=None, w=None, e=None, feedrate=1000):
-        """Move to absolute position for any of the 10 axes."""
-        cmd = "G1"
-        if x is not None: cmd += f" X{x}"
-        if y is not None: cmd += f" Y{y}"
-        if z is not None: cmd += f" Z{z}"
-        if i is not None: cmd += f" I{i}"
-        if j is not None: cmd += f" J{j}"
-        if k is not None: cmd += f" K{k}"
-        if u is not None: cmd += f" U{u}"
-        if v is not None: cmd += f" V{v}"
-        if w is not None: cmd += f" W{w}"
-        if e is not None: cmd += f" E{e}"
-        cmd += f" F{feedrate}"
-        print(f"\nExecuting move command: {cmd}")
-        self.send_gcode(cmd)
-        time.sleep(1)
-        # return self.get_position()
-
-    def home(self, axes=None, wait=True):
-        """Home axes using G28.
-        - axes: list like ['X','Y','Z'] or ['X','Y','Z','U','V','W','I','J','K'].
-                 If None, home all supported axes per firmware config.
-        - wait: send M400 to wait until motion completes.
+    
+    def run_test(self, x_dist=-100, y_dist=-100, z_dist=-50,
+                   u_dist=-10, v_dist=-10, w_dist=-50,
+                   i_dist=-100, j_dist=-100, k_dist=-50,
+                   e_dist=5, feedrate=1000, wait_time=2):
         """
-        if axes is None:
-            cmd = "G28"
-        else:
-            # Ensure unique, valid axis letters and keep order
-            valid = {'X','Y','Z','I','J','K','U','V','W'}
-            req = [a for a in axes if a in valid]
-            if not req:
-                cmd = "G28"
-            else:
-                cmd = "G28 " + " ".join(req)
-        print(f"\nHoming with: {cmd}")
-        resp = self.send_gcode(cmd)
-        if wait:
-            self.send_gcode("M400")
-        time.sleep(0.3)
-        self.get_position()
-        return resp
-
-    def home_xyz(self, wait=True):
-        """Convenience: Home only X, Y, Z."""
-        return self.home(['X','Y','Z'], wait=wait)
-
-    def home_all_linear(self, wait=True):
-        """Convenience: Home all 9 linear axes (if endstops are configured)."""
-        return self.home(['X','Y','Z','U','V','W','I','J','K'], wait=wait)
-
-    def zero_extruder(self):
-        """Set E position to 0 without homing (extruder typically has no endstop)."""
-        self.send_gcode("G92 E0")
-
-    def close(self):
-        self.ser.close()
-
-
-def main():
-    # 使用默认参数创建控制器，自动启用步进电机
-    controller = MotorController()  # 已经自动启用步进电机
-    try:
-        print("\nInitializing...")
-        controller.send_gcode("M211 S0")  # Disable software endstops
-        controller.set_absolute_positioning()
-        controller.set_current_position(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-
-        # Move core axes
-        #controller.move_to(x=0, y=0, z=-1000000)
-        #controller.move_to(e=-8000)
-        #controller.move_motor_by_steps('Y', 800)
-        #time.sleep(3)
-        #controller.move_motor_by_steps('Y', 2000)
-        #for i in range(6):            controller.move_motor_by_steps('I', 300000, 2000);            controller.move_motor_by_steps('K', -150000, 2000)
-
-        #controller.move_motor_by_steps('Z', 5000, 2000)
-        #controller.move_motor_by_steps('J', 10000, 1000) #test the volume of the new
-        #time.sleep(3)
-        controller.move_motor_by_steps('I', 400000, 2000)
-        #controller.move_motor_by_steps('Z', -500000, 2000)
-        controller.move_motor_by_steps('K', -150000, 2000)
-        controller.move_motor_by_steps('I', 300000, 1000)
-        #controller.move_motor_by_steps('Z', -500000, 2000)
-        controller.move_motor_by_steps('K', -150000, 2000)
-        controller.move_motor_by_steps('I', 300000, 2000)
-        #controller.move_motor_by_steps('Z', -500000, 2000)
-        controller.move_motor_by_steps('K', -150000, 2000)
-        controller.move_motor_by_steps('I', 300000, 2000)
-        #controller.move_motor_by_steps('Z', -500000, 2000)
-        controller.move_motor_by_steps('K', -150000, 2000)
-        controller.move_motor_by_steps('I', 300000, 2000)
-        #controller.move_motor_by_steps('Z', -500000, 2000)
-        controller.move_motor_by_steps('K', -150000, 2000)
-
-        #controller.move_motor_by_steps('Y', 1053, 2000)
-        #time.sleep(20)
+        运行全部10轴顺序测试 / Run sequential test of all 10 axes
         
-        #time.sleep(3)       
-        #controller.move_motor_by_steps('Y', 2000)
-        #time.sleep(3)
+        这是test_all(doing well).py脚本功能的集成版本 / This is an integrated version of the test_all(doing well).py script functionality
+        """
+        print("\n" + "=" * 60)
+        print("十轴顺序运动测试 / 10-Axis Sequential Movement Test")
+        print("=" * 60)
+        print("主要轴 (XYZ) / Main Axes (XYZ):")
+        print(f"  X轴移动 / X-axis movement: {x_dist}mm, Y轴移动 / Y-axis movement: {y_dist}mm, Z轴移动 / Z-axis movement: {z_dist}mm")
+        print("额外轴组1 (UVW) / Additional Axes Group 1 (UVW):")
+        print(f"  U轴移动 / U-axis movement: {u_dist}mm, V轴移动 / V-axis movement: {v_dist}mm, W轴移动 / W-axis movement: {w_dist}mm")
+        print("额外轴组2 (IJK) / Additional Axes Group 2 (IJK):")
+        print(f"  I轴移动 / I-axis movement: {i_dist}mm, J轴移动 / J-axis movement: {j_dist}mm, K轴移动 / K-axis movement: {k_dist}mm")
+        print("挤出机轴 (E) / Extruder Axis (E):")
+        print(f"  E轴移动 / E-axis movement: {e_dist}mm")
+        print(f"运动速度 / Movement speed: {feedrate}mm/min, 等待时间 / Wait time: {wait_time}秒 / seconds")
+        print("=" * 60 + "\n")
         
-        #time.sleep(1)
-        #controller.move_motor_by_steps('J', 150000, 2500)
-        #controller.move_motor_by_steps('Y', -1000)
-
-        # Return to origin
-        #controller.set_absolute_positioning()
-        #controller.move_to(x=0, y=0, z=0)
-        #controller.move_to(e=0)
-
-    finally:
-        print("\nDisabling steppers and closing connection...")
-        controller.disable_steppers()
-        controller.close()
-
-
-if __name__ == "__main__":
-    main()
+        try:
+            # 确保通信正常 / Ensure communication is normal
+            print("\n验证通信... / Verifying communication...")
+            self.send_gcode("M115")  # 获取固件信息 / Get firmware info
+            time.sleep(0.5)
+            
+            # 确保相对模式 / Ensure relative mode
+            self.set_relative_positioning()
+            
+            # 开始移动测试 / Start movement test
+            print("\n----- 开始移动主要轴 (XYZ) / Start Moving Main Axes (XYZ) -----")
+            self.move_x(x_dist, feedrate)
+            time.sleep(wait_time)
+            
+            self.move_y(y_dist, feedrate)
+            time.sleep(wait_time)
+            
+            self.move_z(z_dist, feedrate)
+            time.sleep(wait_time)
+            
+            print("\n----- 开始移动额外轴组1 (UVW) / Start Moving Additional Axes Group 1 (UVW) -----")
+            self.move_u(u_dist, feedrate)
+            time.sleep(wait_time)
+            
+            self.move_v(v_dist, feedrate)
+            time.sleep(wait_time)
+            
+            self.move_w(w_dist, feedrate)
+            time.sleep(wait_time)
+            
+            print("\n----- 开始移动额外轴组2 (IJK) / Start Moving Additional Axes Group 2 (IJK) -----")
+            self.move_i(i_dist, feedrate)
+            time.sleep(wait_time)
+            
+            self.move_j(j_dist, feedrate)
+            time.sleep(wait_time)
+            
+            self.move_k(k_dist, feedrate)
+            time.sleep(wait_time)
+            
+            print("\n----- 开始移动挤出机轴 (E) / Start Moving Extruder Axis (E) -----")
+            self.select_extruder(0)
+            time.sleep(0.5)
+            self.move_e(e_dist, feedrate)
+            time.sleep(wait_time)
+            
+        except KeyboardInterrupt:
+            print("\n检测到键盘中断，停止测试 / Keyboard interrupt detected, stopping test")
+        
+        print("\n全部测试完成 / All tests completed")
