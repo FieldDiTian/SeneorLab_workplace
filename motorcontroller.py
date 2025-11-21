@@ -320,6 +320,9 @@ class MotorController:
         print(f"\n移动 / Moving {axis}轴 / axis {distance}mm (速度 / speed: {feedrate}mm/min)...")
         self.send_gcode(cmd)
         
+        # 增加一个固定的延时来防止主板断联
+        time.sleep(1)
+        
         # 等待移动完成 / Wait for movement to complete
         if wait:
             self.wait_for_movement()
