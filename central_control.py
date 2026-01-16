@@ -196,23 +196,54 @@ def main():
             output_folder = create_output_folder(file)
             
             try:
-                # 读取Excel，不带表头
-                df = pd.read_excel(file_path, header=None)
+                # 读取Excel，第一行作为表头
+                df = pd.read_excel(file_path, header=0)
             except Exception as e:
                 print(f"读取Excel失败: {e}")
                 continue
 
+            # 判断第一列是否为实验编号列
+            first_col_name = df.columns[0] if len(df.columns) > 0 else ""
+            has_exp_num_col = False
+            data_start_col = 0
+            
+            # 检查第一列是否为编号列（列名可能是"编号"、"Experiment"、"No"等，或者全是数字）
+            if first_col_name in ['编号', 'Experiment', 'No', 'ID', 'Exp']:
+                has_exp_num_col = True
+                data_start_col = 1
+                print(f"检测到实验编号列: {first_col_name}")
+            elif len(df) > 0:
+                # 检查第一列数据是否全是数字（作为编号）
+                try:
+                    first_col_data = pd.to_numeric(df.iloc[:, 0], errors='coerce')
+                    if first_col_data.notna().sum() / len(first_col_data) > 0.8:  # 80%以上是数字
+                        has_exp_num_col = True
+                        data_start_col = 1
+                        print(f"检测到第一列为实验编号列")
+                except:
+                    pass
+
             # 遍历每一行
             for index, row in df.iterrows():
-                experiment_num = index + 1
+                # 获取实验编号
+                if has_exp_num_col:
+                    # 使用第一列的值作为实验编号
+                    try:
+                        experiment_num = int(row.iloc[0])
+                    except (ValueError, TypeError):
+                        experiment_num = index + 1
+                else:
+                    # 使用行索引作为实验编号（数据从第1行开始，表头已被跳过）
+                    experiment_num = index + 1
                 
-                # 读取8列对应的数据
+                # 读取化学物质数据（从data_start_col开始的8列）
                 target_volumes = {}
                 row_valid = False
                 
                 for i, fluid_name in enumerate(FLUID_ORDER):
-                    if i < len(row):
-                        val = row.iloc[i]
+                    col_idx = data_start_col + i
+                    if col_idx < len(row):
+                        val = row.iloc[col_idx]
                         if pd.notna(val):
                             try:
                                 vol = float(val)
