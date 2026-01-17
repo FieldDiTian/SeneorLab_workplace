@@ -1,153 +1,166 @@
-# 自动化化学控制系统 (Automated Chemical Control System)
+# Automated Chemical Control System
 
-## 快速上手
-阅读本文第3/5/7部分即可
+## Quick Start
+Read sections 3, 5, and 7 of this document to get started.
 
-## 1. 系统概述 (System Overview)
-本系统是一个用于自动化化学实验的控制平台，旨在精确控制多种化学试剂的添加、称重、混匀及电化学阻抗谱 (EIS) 检测。
-系统集成了十轴电机控制系统、高精度电子秤读取以及 Digilent Analog Discovery (EIS) 模块。
-系统采用分布式设计，主控程序只负责根据表格内容执行控制循环，控制循环中的具体功能封装进了modules中（承重、驱动电机、EIS测量）。而实验者需要自行设计每次的实验参数表格。表格的设计说明见第七部分。
+## 1. System Overview
+This system is an automated control platform for chemical experiments, designed to precisely control the addition of various chemical reagents, weighing, mixing, and Electrochemical Impedance Spectroscopy (EIS) detection.
+The system integrates a ten-axis motor control system, high-precision electronic scale reading, and Digilent Analog Discovery (EIS) module.
+The system adopts a distributed design. The main control program is only responsible for executing the control loop according to the table content. The specific functions in the control loop are encapsulated in modules (weighing, motor drive, EIS measurement). Experimenters need to design the experimental parameter table for each experiment. See section 7 for table design instructions.
 
-## 2. 硬件架构 (Hardware Architecture)
-系统基于 Marlin 固件控制的定制 10 轴运动控制板（COM8）。
-### 轴映射 (Axis Mapping)
+## 2. Hardware Architecture
+The system is based on a custom 10-axis motion control board (COM8) controlled by Marlin firmware.
 
-| 轴 (Axis) | 功能 (Function) | 对应物质 (Chemical) | 备注 (Notes) |
+### Axis Mapping
+
+| Axis | Function | Chemical | Notes |
 | :--- | :--- | :--- | :--- |
-| **X** | 步进电机 1 | NaCl (氯化钠) | 溶液泵入 |
-| **Y** | 步进电机 2 | KCl (氯化钾) | 溶液泵入 |
-| **Z** | 步进电机 3 | Urea (尿素) | 溶液泵入 |
-| **U** | 步进电机 4 | Na_lactate (乳酸钠) | 溶液泵入 |
-| **V** | 步进电机 5 | NH4Cl (氯化铵) | 溶液泵入 |
-| **W** | 步进电机 6 | CaCl2 (氯化钙) | 溶液泵入 |
-| **I** | 步进电机 7 | Glucose (葡萄糖) | 溶液泵入 |
-| **J** | 水泵 | WATER (蒸馏水) | 清洗与补水 |
-| **K** | 水泵 | EXTRACT (废液) | 抽出废液，高流速 |
-| **E** | 水泵 | MIX (气体混匀) | 气体搅拌或机械搅拌 |
+| **X** | Stepper Motor 1 | NaCl (Sodium Chloride) | Solution pumping |
+| **Y** | Stepper Motor 2 | KCl (Potassium Chloride) | Solution pumping |
+| **Z** | Stepper Motor 3 | Urea | Solution pumping |
+| **U** | Stepper Motor 4 | Na_lactate (Sodium Lactate) | Solution pumping |
+| **V** | Stepper Motor 5 | NH4Cl (Ammonium Chloride) | Solution pumping |
+| **W** | Stepper Motor 6 | CaCl2 (Calcium Chloride) | Solution pumping |
+| **I** | Stepper Motor 7 | Glucose | Solution pumping |
+| **J** | Water Pump | WATER (Distilled Water) | Cleaning and water supply |
+| **K** | Water Pump | EXTRACT (Waste Liquid) | Extract waste liquid, high flow rate |
+| **E** | Water Pump | MIX (Gas Mixing) | Gas stirring or mechanical stirring |
 
-### 传感器
-- **电子秤**: 通过串口 (COM5) 连接，实时读取烧杯重量。
-- **EIS设备**: Digilent Analog Discovery 2/3，用于电化学测量。
+### Sensors
+- **Electronic Scale**: Connected via serial port (COM5) to read beaker weight in real-time.
+- **EIS Device**: Digilent Analog Discovery 2/3 for electrochemical measurements.
 
-## 3. 软件架构 (Software Architecture)
-文件结构如下：
+## 3. Software Architecture
+File structure:
 ```
 SeneorLab_workplace/
-├── central_control.py      # [主控] 主控制程序，负责调用各模块功能，实现控制循环，读写表格，输出并保存EIS数据
-├── motor_test.py           # [调试] 单独调试电机，包含全部十轴的单独控制功能
-├── refill_syringe.py       # [工具] 填装功能，选择电机和任务后重复执行前进/后退100步直到用户按下回车
-├── modules/                # [模块库] 封装控制系统各个模块的功能
-│   ├── motorcontroller.py  # 步进电机和水泵控制 (G-code通信)
-│   ├── eis_module.py       # EIS 测量模块
-│   └── scale_reader.py     # 电子秤串口读取模块
-├── Data/                   # [数据] EIS图像和数据，按日期分类存储
-├── log/                    # [日志] 工作区改动和每日工作记录
-├── Tables/                 # [配置] 每次实验的测试表格及生成表格的程序
-└── __pycache__/            # [忽略] Python运行缓存文件
+├── central_control.py      # [Main Control] Main control program, calls module functions, implements control loop, reads/writes tables, outputs and saves EIS data
+├── motor_test.py           # [Debug] Debug motors independently, includes independent control for all ten axes
+├── refill_syringe.py       # [Tool] Refill function, repeatedly executes forward/backward 100 steps after selecting motor and task until user presses Enter
+├── modules/                # [Module Library] Encapsulates control system module functions
+│   ├── motorcontroller.py  # Stepper motor and water pump control (G-code communication)
+│   ├── eis_module.py       # EIS measurement module
+│   └── scale_reader.py     # Electronic scale serial port reading module
+├── Data/                   # [Data] EIS images and data, stored by date classification
+├── log/                    # [Log] Workspace changes and daily work records
+├── Tables/                 # [Configuration] Test tables for each experiment and table generation program
+└── __pycache__/            # [Ignore] Python runtime cache files
 ```
 
-### 程序功能说明
-*** 非常重要：运行所有程序之前，请确保该程序为系统唯一在运行的程序，也就是没有其他程序占用串口，如果已有程序占用串口8的时候其他程序接入串口8会导致主板崩溃 ***
-*** 非常重要：请通过调用motor_controller来运行步进电机，Di Tian写好了保护程序，如果直接只用G-code控制主板非常容易导致主板直接崩溃（比如主板上一条指令尚未处理完用户便输入了下一条指令） ***
-*** 主板中央的红色指示灯应该保持常亮，其状态为明亮的红色，如果为暗红色代表主板崩溃后进入了DFU mode ***
-1.  **`central_control.py` (主控程序)**
-    - 负责调用各个模块功能，实现控制循环。
-    - 读取并解析 Excel 表格中的实验参数。
-    - 协调电机、电子秤和EIS模块的工作流程。
-    - 输出并保存EIS数据和实验日志。
-使用说明：运行程序后会自动依据工作区中现有的表格，逐行开始添加物质并测量，直到表格最后一行运行完成。实验数据会存入data，文件夹名称与表格保持一致。
-2.  **`motor_test.py` (电机调试)**
-    - 单独调试电机功能。
-    - 包含全部十轴的独立控制接口。
-    - 用于测试和验证各轴电机运行状态。
-使用说明：直接运行程序，程序会让你选择要调试的轴，输入步数即可
-3.  **`refill_syringe.py` (填装工具)**
-    - 填装和清洗功能。
-    - 选择电机和任务后重复执行前进/后退100步。
-    - 按下回车键终止运行。
-使用说明：直接运行程序，程序会询问要执行哪个电机，输入数字后，程序会询问你吸入还是排出，确认后程序会持续向电机发送步进100单位的指令，**直到用户按下回车终止程序**
-### 模块说明
+### Program Function Description
+*** VERY IMPORTANT: Before running any program, ensure it is the only program running on the system, meaning no other program is occupying the serial port. If another program is occupying serial port 8 when another program accesses serial port 8, it will cause the mainboard to crash. ***
+*** VERY IMPORTANT: Please run the stepper motor by calling motor_controller. Di Tian has written protection programs. Directly controlling the mainboard with G-code is very easy to cause the mainboard to crash (for example, when the previous command on the mainboard has not been processed yet and the user inputs the next command). ***
+*** The red indicator light in the center of the mainboard should remain constantly on, with a bright red status. If it is dark red, it means the mainboard has crashed and entered DFU mode. ***
 
-1.  **`modules/motorcontroller.py` (电机控制)**
-    - 封装步进电机和水泵的底层控制。
-    - 处理 G-code 指令通信 (G1, G90/G91 等)。
-    - 提供各轴运动接口和等待逻辑。
-    - 不通过调用motorcontroller直接发送Gcode给电机可能导致主板崩溃
+1.  **`central_control.py` (Main Control Program)**
+    - Calls various module functions to implement the control loop.
+    - Reads and parses experimental parameters from Excel tables.
+    - Coordinates the workflow of motors, electronic scale, and EIS modules.
+    - Outputs and saves EIS data and experiment logs.
 
-2.  **`modules/scale_reader.py` (称重模块)**
-    - 读取电子秤的串口数据。
-    - 实现 `wait_for_stable_weight()` 函数，确保读数稳定后再记录。
-    - 提供实时重量监测功能。
+Usage Instructions: After running the program, it will automatically add substances and measure according to the existing table in the workspace, line by line, until the last line of the table is completed. Experimental data will be stored in the data folder with the same name as the table.
 
-3.  **`modules/eis_module.py` (EIS测量)**
-    - 调用 `dwfpy` 控制 Digilent Analog Discovery 设备。
-    - 执行电化学阻抗谱频率扫描。
-    - 生成并保存 `.txt` 数据文件和 `.png` 图表。
+2.  **`motor_test.py` (Motor Debug)**
+    - Debug motor functions independently.
+    - Includes independent control interfaces for all ten axes.
+    - Used to test and verify the running status of each axis motor.
 
----
+Usage Instructions: Run the program directly, and it will ask you to select the axis to debug. Enter the number of steps.
 
-## 4. 自动化工作流 (Workflow)
+3.  **`refill_syringe.py` (Refill Tool)**
+    - Refill and cleaning functions.
+    - Repeatedly executes forward/backward 100 steps after selecting motor and task.
+    - Press Enter to terminate the program.
 
-主程序 (`central_control.py`) 严格遵循以下 9 步流程：
+Usage Instructions: Run the program directly. The program will ask which motor to execute. After entering the number, the program will ask whether to aspirate or dispense. After confirmation, the program will continuously send instructions to the motor to step 100 units **until the user presses Enter to terminate the program**.
 
-1.  **清空废液 (Extract)**
-    - 废液泵满速运行 (30000步)，确保工作台残留液体排空。
-2.  **清洗工作台 (Wash Cycles)**
-    - 循环执行 3 次：泵入 30mL 水 -> 抽干废液。
-3.  **读取配置 (Read Config)**
-    - 从 Excel 读取当前实验行的 8 个数据（7种化学物质 + 水）。
-    - 数据直接代表**体积 (mL)**。
-4.  **初始称重 (Tare)**
-    - 记录空杯重量作为基准。
-5.  **加液循环 (Dispense Loop)**
-    - 按顺序 (NaCl -> ... -> Glucose -> Water) 加入液体。
-    - 统一换算标准：**1000 steps/mL**。
-6.  **称重记录 (Weighing)**
-    - 每加入一种液体后，等待读数稳定，记录实际增加的质量 (g)。
-7.  **混匀 (Mixin)**
-    - 启动混合电机 (E轴) 进行搅拌。
-8.  **EIS 测试 (Measurement)**
-    - 扫描并记录阻抗数据。
-    - 保存包含“目标体积”和“实际质量”的详细日志。
-9.  **循环 (Next Experiment)**
-    - 完成当前实验，准备下一行数据。
+### Module Description
+
+1.  **`modules/motorcontroller.py` (Motor Control)**
+    - Encapsulates low-level control of stepper motors and water pumps.
+    - Handles G-code instruction communication (G1, G90/G91, etc.).
+    - Provides motion interfaces and waiting logic for each axis.
+    - Directly sending G-code to the motor without calling motorcontroller may cause mainboard crashes.
+
+2.  **`modules/scale_reader.py` (Weighing Module)**
+    - Reads serial port data from the electronic scale.
+    - Implements `wait_for_stable_weight()` function to ensure stable readings before recording.
+    - Provides real-time weight monitoring function.
+
+3.  **`modules/eis_module.py` (EIS Measurement)**
+    - Calls `dwfpy` to control Digilent Analog Discovery device.
+    - Executes electrochemical impedance spectroscopy frequency scanning.
+    - Generates and saves `.txt` data files and `.png` charts.
 
 ---
 
-## 5. 使用指南/快速上手 (Usage Guide)
-1.根据Tables中的说明，准备好表格文件并配置好溶液
-2.通过refill功能，填充针管，切记：***如果用户不按下回车程序将不会停止***
-3.将表格命名为今日的日期，放入工作区（与central_cobtroller在同一路径下），请确保工作区只有唯一的表格，如果工作区有别人的表格，请帮他把表格放入Tables文件夹
-4.请确保所有针管充满液体，水泵连接的水缸足量，废水排出的水管放入了废水缸，7-holes支架对准了试验区，所有化学物质水管连接扎实，混合水泵的水管对准测量模块中心
-5.直接运行central_control.py，观察试验台工作状态，当Data文件夹中出现了你的表格对应的数据后即可离开
-6.如果你改动了程序或者使用工作站测试了数据，请在log文件中进行工作留痕
-## 6. 参数配置 (Configuration)
+## 4. Automated Workflow
 
-在 `central_control.py` 头部可以调整关键参数：
-现在的参数是Di Tian测试的，可以正常使用，但是不确定以后会不会有变化。
+The main program (`central_control.py`) strictly follows the following 9-step process:
+
+1.  **Extract (Clear Waste Liquid)**
+    - Waste liquid pump runs at full speed (30,000 steps) to ensure the workbench residual liquid is drained.
+2.  **Wash Cycles (Clean Workbench)**
+    - Execute 3 cycles: pump in 30mL of water -> drain waste liquid.
+3.  **Read Config (Read Configuration)**
+    - Read 8 data points from the current experiment row in Excel (7 chemical substances + water).
+    - Data directly represents **volume (mL)**.
+4.  **Tare (Initial Weighing)**
+    - Record empty cup weight as baseline.
+5.  **Dispense Loop (Liquid Addition Loop)**
+    - Add liquids in order (NaCl -> ... -> Glucose -> Water).
+    - Unified conversion standard: **1000 steps/mL**.
+6.  **Weighing (Weight Recording)**
+    - After adding each liquid, wait for stable readings and record the actual increased mass (g).
+7.  **Mixing**
+    - Start mixing motor (E-axis) for stirring.
+8.  **EIS Test (Measurement)**
+    - Scan and record impedance data.
+    - Save detailed logs containing "target volume" and "actual mass".
+9.  **Loop (Next Experiment)**
+    - Complete current experiment and prepare for the next row of data.
+
+---
+
+## 5. Usage Guide / Quick Start
+
+1. According to the instructions in Tables, prepare the table file and configure the solutions.
+2. Use the refill function to fill the syringes. Remember: ***If the user does not press Enter, the program will not stop.***
+3. Name the table with today's date and place it in the workspace (in the same path as central_controller). Ensure there is only one table in the workspace. If there is someone else's table in the workspace, please help them put the table in the Tables folder.
+4. Ensure all syringes are filled with liquid, the water tank connected to the water pump has sufficient volume, the waste water discharge tube is placed in the waste water tank, the 7-holes bracket is aligned with the test area, all chemical substance water pipes are firmly connected, and the mixing water pump tube is aimed at the center of the measurement module.
+5. Run central_control.py directly, observe the test bench working status. You can leave when the data corresponding to your table appears in the Data folder.
+6. If you modify the program or test data using the workstation, please leave a work trace in the log file.
+
+## 6. Parameter Configuration
+
+Key parameters can be adjusted at the beginning of `central_control.py`:
+The current parameters were tested by Di Tian and can be used normally, but it is uncertain whether there will be changes in the future.
 
 ```python
-STEPS_PER_ML = -20      # 全局步数转换比例
-SPEED = { ... }          # 各电机的运行速度
+STEPS_PER_ML = -20      # Global step conversion ratio
+SPEED = { ... }          # Running speed of each motor
 CONFIG = {
-    'WASH_VOLUME': 30.0,    # 清洗水量
-    'EXTRACT_STEPS': 3000, # 抽废液强度
-    'WASH_CYCLES': 3,       # 清洗次数
+    'WASH_VOLUME': 30.0,    # Cleaning water volume
+    'EXTRACT_STEPS': 3000,  # Waste liquid extraction intensity
+    'WASH_CYCLES': 3,       # Number of cleaning cycles
     ...
 }
 ```
 
-## 7. 表格配置说明
-调用主控程序前请保证工作去只有唯一的表格文件。如果有上一位实验者的表格，请帮他将表格移入tables中
-请用今日日期命名表格，表格对应的数据会存放进Data文件夹下的同名文件夹
-不要改变示例表格中化学物质的顺序，程序是从左到右依次读取表格数据的，顺序改变会导致程序错误控制
-单元格数值要么为0，如果不为0，至少为3ML，且为整数。因为小于3ML的控制指令会导致电机几乎不移动，体系中也就没有物质加入
-单元格每一行不超过25ML，但应该尽量接近25ML，因为超过25ML会导致试验台漏水
-单元格每一列不超过200ML，但应该尽量接近200ML，因为针管最大容量为200ML
-可以扩展表格行数，不得扩展列数
-表格第一列为实验组数的编号，从第二列开始为化学物质，顺序与示例表格保持一致
-Tables中的generate_random_table.py会生成复合程序要求的随机表格，你也可以把以上配置说明复制粘贴给生成式AI让他们帮你制作表格。
+## 7. Table Configuration Instructions
+
+Before calling the main control program, ensure there is only one table file in the workspace. If there is a table from the previous experimenter, please help them move the table into Tables.
+
+- Name the table with today's date. The data corresponding to the table will be stored in a folder with the same name in the Data folder.
+- Do not change the order of chemical substances in the sample table. The program reads table data from left to right in order. Changing the order will cause program control errors.
+- Cell values should be either 0, or if not 0, at least 3mL and an integer. Control instructions less than 3mL will cause the motor to barely move, and no substance will be added to the system.
+- Each row of cells should not exceed 25mL but should be as close to 25mL as possible, because exceeding 25mL will cause the test bench to leak.
+- Each column of cells should not exceed 200mL but should be as close to 200mL as possible, because the maximum capacity of the syringe is 200mL.
+- Table rows can be extended, but columns must not be extended.
+- The first column of the table is the experimental group number, and from the second column onwards are chemical substances, in the same order as the sample table.
+- The generate_random_table.py in Tables will generate random tables that meet program requirements. You can also copy and paste the above configuration instructions to generative AI to help you create tables.
+
 ---
 
-**最后更新**: 2026-01-16
-**维护者**: Di Tian
+**Last Updated**: January 16, 2026
+**Maintainer**: Di Tian
