@@ -47,8 +47,8 @@ SPEED = {
 
 # 实验参数
 CONFIG = {
-    'WASH_VOLUME': 20.0,     # 清洗用水量 (mL)
-    'EXTRACT_STEPS': 1000,   # 抽废液步数 (固定值)
+    'WASH_VOLUME': 25.0,     # 清洗用水量 (mL)
+    'EXTRACT_STEPS': 2000,   # 抽废液步数 (固定值)
     'MIX_STEPS': 500,       # 混匀步数
     'WASH_CYCLES': 3,        # 清洗次数
     'MAX_WEIGHT_LIMIT': 140.0 # 电子秤安全限重 (g)
