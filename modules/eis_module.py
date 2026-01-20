@@ -152,6 +152,7 @@ def main(mass_dict=None, target_concentrations=None, output_folder=None, experim
     fname_parts.append(f"NH4Cl_{mass_dict.get('NH4Cl', 0):.4f}g")
     fname_parts.append(f"CaCl2_{mass_dict.get('CaCl2', 0):.4f}g")
     fname_parts.append(f"Glu_{mass_dict.get('Glucose', 0):.4f}g")
+    fname_parts.append(f"Water_{mass_dict.get('WATER', 0):.4f}g")
 
     base_filename = "_".join(fname_parts)
     text_filename = os.path.join(save_dir, base_filename + ".txt")
