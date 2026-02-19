@@ -112,7 +112,7 @@ def main(mass_dict=None, target_concentrations=None, output_folder=None, experim
     if target_concentrations is None:
         target_concentrations = {}
     
-    f_start = 1000e3
+    f_start = 10000e3
     f_stop = 1.0
     points = 100
     freqs = np.logspace(np.log10(f_start), np.log10(f_stop), num=points)
