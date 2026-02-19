@@ -117,7 +117,7 @@ def main(mass_dict=None, target_concentrations=None, output_folder=None, experim
     points = 100
     freqs = np.logspace(np.log10(f_start), np.log10(f_stop), num=points)
 
-    amplitude = 0.05
+    amplitude = 0.5
     r_series = 1e3
     cycles = 30
     oversample = 20
