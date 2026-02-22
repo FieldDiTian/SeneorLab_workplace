@@ -1,3 +1,0 @@
-Device Open: Analog Discovery 3 (210415BD076B)
-Config: NaCl=0, KCl=0, Urea=0, Lac=0, NH4Cl=0, CaCl2=0, Glu=0
---------------------------------------------------
