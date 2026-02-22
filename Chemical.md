@@ -13,7 +13,6 @@
 	•	Urea 40 mM（MW 60.06）：0.4804 g
 	•	NH4Cl 10 mM（MW 53.49）：0.1070 g
 	•	Glucose 0.20 mM（MW 180.16）：0.00721 g（= 7.21 mg）
-	•	Lactic acid 50 mM（纯品）（MW 90.08）：0.9008 g
 	•	Lactic acid 85% 溶液需取：1.0597 g
 	•	CaCl2 2.0 mM
 	•	无水 CaCl2（MW 110.98）：0.04439 g（44.39 mg）
@@ -26,7 +25,6 @@
 	•	Urea 40 mM：0.6006 g
 	•	NH4Cl 10 mM：0.1337 g
 	•	Glucose 0.20 mM：0.00901 g（= 9.01 mg）
-	•	Lactic acid 50 mM（纯品）：1.1260 g
 	•	Lactic acid 85% 溶液需取：1.3247 g
 	•	CaCl2 2.0 mM
 	•	无水 CaCl2：0.05549 g（55.49 mg）
