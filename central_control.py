@@ -51,11 +51,15 @@ CONFIG = {
     'EXTRACT_STEPS': 2000,   # 抽废液步数 (固定值)
     'MIX_STEPS': 500,       # 混匀步数
     'WASH_CYCLES': 3,        # 清洗次数
-    'MAX_WEIGHT_LIMIT': 140.0 # 电子秤安全限重 (g)
+    'MAX_WEIGHT_LIMIT': 140.0, # 电子秤安全限重 (g)
+    'TARGET_TOTAL_VOLUME': 30.0, # 系统液体总量目标 (mL / g)
+    'WATER_FILL_LARGE_THRESHOLD': 2.0,  # 补水大量阈值 (mL)
+    'WATER_FILL_OVERSHOOT': 0.2,        # 最后一步补水过冲量 (mL)
+    'MAX_WATER_FILL_ITERATIONS': 30,    # 补水最大循环次数
 }
 
-# 液体添加顺序 (Excel表格列顺序: 7种化学物质 + 水)
-FLUID_ORDER = ['NaCl', 'KCl', 'Urea', 'Na_lactate', 'NH4Cl', 'CaCl2', 'Glucose', 'WATER']
+# 7种化学物质顺序（不含水，水由scale_reader自动补齐）
+CHEMICAL_ORDER = ['NaCl', 'KCl', 'Urea', 'Na_lactate', 'NH4Cl', 'CaCl2', 'Glucose']
 
 # ================= 辅助函数 =================
 
@@ -111,10 +115,11 @@ def run_experiment(motor, target_volumes, output_folder, experiment_num):
     current_weight = wait_for_stable_weight()
     print(f"  初始读数: {current_weight:.4f} g")
 
-    # --- 5 & 6. 循环配置溶液 (7种化学物质 + 水) ---
-    print("\n[Step 5-6] 配置溶液循环...")
+    # --- 5 & 6. 循环配置溶液 (7种化学物质) ---
+    print("\n[Step 5-6] 配置7种化学物质...")
+    tare_weight = current_weight  # 记录空台重量，用于后续计算总量
     
-    for name in FLUID_ORDER:
+    for name in CHEMICAL_ORDER:
         vol = target_volumes.get(name, 0)
         
         # 保护功能：如果表格中数值为0或接近0，直接跳过，质量记为0
@@ -146,6 +151,62 @@ def run_experiment(motor, target_volumes, output_folder, experiment_num):
         
         if current_weight > CONFIG['MAX_WEIGHT_LIMIT']:
             print(f"警告: 重量超过安全限制 ({current_weight:.2f} > {CONFIG['MAX_WEIGHT_LIMIT']})")
+
+    # --- 6.5 根据scale_reader实际读数补水至目标总量 ---
+    target_total = CONFIG['TARGET_TOTAL_VOLUME']
+    total_added = current_weight - tare_weight
+    deficit = target_total - total_added
+    mass_records['WATER'] = 0.0
+
+    print(f"\n[Step 6.5] 补水至 {target_total:.1f} mL (当前总量: {total_added:.2f} g, 差值: {deficit:.2f} g)")
+
+    if deficit <= 0:
+        print(f"  当前总量 {total_added:.2f}g 已 >= {target_total:.1f}mL，无需补水")
+    else:
+        iteration = 0
+        while deficit > 0 and iteration < CONFIG['MAX_WATER_FILL_ITERATIONS']:
+            iteration += 1
+            
+            # 决定本次补水量：大量差值时一次补大部分，接近目标时小步逼近
+            if deficit > CONFIG['WATER_FILL_LARGE_THRESHOLD']:
+                # 差距较大：补到距目标1mL处
+                water_to_add = deficit - 1.0
+            elif deficit > 0.5:
+                # 中等差距：每次0.3mL
+                water_to_add = 0.3
+            else:
+                # 接近目标：补 deficit + overshoot，确保从上方越过30mL
+                water_to_add = deficit + CONFIG['WATER_FILL_OVERSHOOT']
+            
+            # 确保每次至少加0.1mL以保证进度
+            water_to_add = max(water_to_add, 0.1)
+            
+            print(f"  补水第 {iteration} 次: 计划加入 {water_to_add:.2f} mL...")
+            steps = ml_to_steps(water_to_add)
+            motor.move_axis(AXIS_MAP['WATER'], steps, SPEED['WATER'], wait=True)
+            time.sleep(1.5)
+            
+            # 称重
+            new_weight = wait_for_stable_weight()
+            water_mass = calculate_mass_change(current_weight, new_weight)
+            mass_records['WATER'] += water_mass
+            current_weight = new_weight
+            
+            # 重新计算差值
+            total_added = current_weight - tare_weight
+            deficit = target_total - total_added
+            print(f"     实际总量: {total_added:.2f} g, 剩余差值: {deficit:.2f} g")
+            
+            if current_weight > CONFIG['MAX_WEIGHT_LIMIT']:
+                print(f"警告: 重量超过安全限制 ({current_weight:.2f} > {CONFIG['MAX_WEIGHT_LIMIT']})")
+                break
+        
+        if deficit > 0:
+            print(f"  ⚠ 补水达到最大循环次数 ({CONFIG['MAX_WATER_FILL_ITERATIONS']}), 仍差 {deficit:.2f}g")
+        else:
+            print(f"  ✓ 补水完成! 总量: {total_added:.2f} g (目标: {target_total:.1f} mL)")
+    
+    print(f"  水总计添加质量: {mass_records['WATER']:.4f} g")
 
     # --- 7. 泵入气体混合液体 ---
     print("\n[Step 7] 气体混匀 (Mixing)...")
@@ -236,11 +297,11 @@ def main():
                     # 使用行索引作为实验编号（数据从第1行开始，表头已被跳过）
                     experiment_num = index + 1
                 
-                # 读取化学物质数据（从data_start_col开始的8列）
+                # 读取化学物质数据（从data_start_col开始的7列，忽略Water列）
                 target_volumes = {}
                 row_valid = False
                 
-                for i, fluid_name in enumerate(FLUID_ORDER):
+                for i, fluid_name in enumerate(CHEMICAL_ORDER):
                     col_idx = data_start_col + i
                     if col_idx < len(row):
                         val = row.iloc[col_idx]
