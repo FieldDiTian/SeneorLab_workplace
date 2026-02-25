@@ -10,7 +10,12 @@ import pytz
 SIMULATION_MODE = False
 
 def measure_impedance(device, freq, amp, r_series,
-                      cycles=10, oversample=20, v_range=5.0):
+                      cycles=10, oversample=20, v_range=5.0,
+                      return_waveform=False):
+    """
+    测量单频阻抗。
+    当 return_waveform=True 时，额外返回时域波形 (t, v_c, i_t)。
+    """
     scope = device.analog_input
     wavegen = device.analog_output
 
@@ -47,11 +52,15 @@ def measure_impedance(device, freq, amp, r_series,
     N = len(v_r)
     t = np.arange(N) / fs
 
-    i = v_r / r_series
+    i_t = v_r / r_series
     ph_v = np.sum(v_c * np.exp(-1j * 2 * np.pi * freq * t)) / N
-    ph_i = np.sum(i * np.exp(-1j * 2 * np.pi * freq * t)) / N
+    ph_i = np.sum(i_t * np.exp(-1j * 2 * np.pi * freq * t)) / N
 
-    return ph_v / ph_i
+    Z = ph_v / ph_i
+
+    if return_waveform:
+        return Z, t, v_c, i_t
+    return Z
 
 def plot_impedance(freqs, Z_list, save_dir, base_filename):
     Z_magnitude = np.abs(Z_list)
@@ -95,6 +104,71 @@ def plot_impedance(freqs, Z_list, save_dir, base_filename):
     plt.savefig(os.path.join(save_dir, f"{base_filename}_Bode Plot - Phase.png"), dpi=300)
     plt.close()
 
+def plot_time_domain(waveform_data, save_dir, base_filename):
+    """
+    绘制选定频率点的时域 V(t) 和 i(t) 波形图。
+    waveform_data: list of (freq, t, v_c, i_t) 元组
+    每个频率生成一张双轴图：左轴电压，右轴电流。
+    """
+    for freq, t, v_c, i_t in waveform_data:
+        # 只显示前几个周期，避免图太密
+        show_cycles = min(5, len(t))
+        n_show = min(len(t), int(5 / freq * (freq * 20)))  # 5个周期的采样点数
+        if n_show < 10:
+            n_show = len(t)
+        
+        t_ms = t[:n_show] * 1e3  # 转为毫秒 (高频) 或保持秒
+        v_show = v_c[:n_show]
+        i_show = i_t[:n_show]
+
+        # 根据频率选择合适的时间单位
+        total_time = t[n_show - 1] if n_show > 0 else t[-1]
+        if total_time < 1e-3:
+            t_plot = t[:n_show] * 1e6  # μs
+            t_unit = 'μs'
+        elif total_time < 1:
+            t_plot = t[:n_show] * 1e3  # ms
+            t_unit = 'ms'
+        else:
+            t_plot = t[:n_show]        # s
+            t_unit = 's'
+
+        # 格式化频率标签
+        if freq >= 1e6:
+            freq_label = f"{freq/1e6:.1f} MHz"
+        elif freq >= 1e3:
+            freq_label = f"{freq/1e3:.1f} kHz"
+        else:
+            freq_label = f"{freq:.1f} Hz"
+
+        fig, ax1 = plt.subplots(figsize=(8, 4))
+
+        color_v = '#1f77b4'
+        color_i = '#d62728'
+
+        ax1.plot(t_plot, v_show, color=color_v, linewidth=0.8, label='V(t)')
+        ax1.set_xlabel(f'Time ({t_unit})')
+        ax1.set_ylabel('Voltage V(t) (V)', color=color_v)
+        ax1.tick_params(axis='y', labelcolor=color_v)
+
+        ax2 = ax1.twinx()
+        ax2.plot(t_plot, i_show * 1e3, color=color_i, linewidth=0.8, label='i(t)')  # mA
+        ax2.set_ylabel('Current i(t) (mA)', color=color_i)
+        ax2.tick_params(axis='y', labelcolor=color_i)
+
+        fig.suptitle(f'Time-Domain Waveform @ {freq_label}', fontsize=12)
+        ax1.grid(True, alpha=0.3)
+
+        # 合并图例
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+
+        fig.tight_layout()
+        safe_freq = freq_label.replace(' ', '_')
+        fig.savefig(os.path.join(save_dir, f"{base_filename}_Waveform_{safe_freq}.png"), dpi=300)
+        plt.close(fig)
+
 def main(mass_dict=None, target_concentrations=None, output_folder=None, experiment_num=None):
     """
     运行EIS测量
@@ -112,9 +186,9 @@ def main(mass_dict=None, target_concentrations=None, output_folder=None, experim
     if target_concentrations is None:
         target_concentrations = {}
     
-    f_start = 10000e3
-    f_stop = 1.0
-    points = 100
+    f_start = 1e6       # 1 MHz
+    f_stop = 1.0        # 1 Hz
+    points = 60         # 6 decades × 10 points/decade = 60
     freqs = np.logspace(np.log10(f_start), np.log10(f_stop), num=points)
 
     amplitude = 0.5
@@ -185,12 +259,17 @@ def main(mass_dict=None, target_concentrations=None, output_folder=None, experim
                 f_text.write("-" * 50 + "\n")
                 
                 Z_list = []
-                for f in freqs:
-                    Z = measure_impedance(dev, f,
+                waveform_data = []
+
+                for idx, f in enumerate(freqs):
+                    result = measure_impedance(dev, f,
                                           amp=amplitude,
                                           r_series=r_series,
                                           cycles=cycles,
-                                          oversample=oversample)
+                                          oversample=oversample,
+                                          return_waveform=True)
+                    Z, t_wave, v_c_wave, i_t_wave = result
+                    waveform_data.append((f, t_wave, v_c_wave, i_t_wave))
                     Z_list.append(Z)
                     # 保存数值格式：频率, 实部, 虚部, 模, 相位
                     f_text.write(f"{f:.4f}, {Z.real:.4f}, {Z.imag:.4f}, {abs(Z):.4f}, {np.angle(Z, deg=True):.4f}\n")
@@ -198,7 +277,9 @@ def main(mass_dict=None, target_concentrations=None, output_folder=None, experim
                     line = f"→ {f:8.1f} Hz: |Z|={abs(Z):7.2f} Ω, ∦Z={np.angle(Z,deg=True):6.2f}°"
                     print(line)
 
-        plot_impedance(freqs, np.array(Z_list), save_dir, base_filename)
+        if waveform_data:
+            plot_time_domain(waveform_data, save_dir, base_filename)
+            print(f"    ✓ Saved {len(waveform_data)} time-domain waveform plots")
         print(f"    ✓ Measurement complete!")
         return Z_list
 
