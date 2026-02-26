@@ -221,7 +221,7 @@ def run_experiment(motor, target_volumes, output_folder, experiment_num):
         eis_module.main(
             mass_dict=mass_records,
             target_concentrations=target_volumes,
-            output_folder=output_folder,
+            output_folder=None,
             experiment_num=experiment_num
         )
     except Exception as e:
