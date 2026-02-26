@@ -164,6 +164,11 @@ def run_experiment(motor, target_volumes, output_folder, experiment_num):
         print(f"  当前总量 {total_added:.2f}g 已 >= {target_total:.1f}mL，无需补水")
     else:
         iteration = 0
+        no_change_count = 0          # 连续无质量变化计数
+        commanded_water_total = 0.0  # 累计命令补水量 (mL)
+        MAX_NO_CHANGE = 3            # 连续无变化最大容忍次数
+        MAX_COMMANDED_WATER = 35.0            # 命令补水量安全上限 (mL)
+
         while deficit > 0 and iteration < CONFIG['MAX_WATER_FILL_ITERATIONS']:
             iteration += 1
             
@@ -184,9 +189,11 @@ def run_experiment(motor, target_volumes, output_folder, experiment_num):
             print(f"  补水第 {iteration} 次: 计划加入 {water_to_add:.2f} mL...")
             steps = ml_to_steps(water_to_add)
             motor.move_axis(AXIS_MAP['WATER'], steps, SPEED['WATER'], wait=True)
+            commanded_water_total += water_to_add
             time.sleep(1.5)
             
             # 称重
+            prev_weight = current_weight
             new_weight = wait_for_stable_weight()
             water_mass = calculate_mass_change(current_weight, new_weight)
             mass_records['WATER'] += water_mass
@@ -196,13 +203,25 @@ def run_experiment(motor, target_volumes, output_folder, experiment_num):
             total_added = current_weight - tare_weight
             deficit = target_total - total_added
             print(f"     实际总量: {total_added:.2f} g, 剩余差值: {deficit:.2f} g")
+
+            # === 安全检查 1: 连续无质量变化 ===
+            actual_change = abs(new_weight - prev_weight)
+            if actual_change < 0.05:
+                no_change_count += 1
+                print(f"  ⚠ 秤读数无变化 (连续 {no_change_count}/{MAX_NO_CHANGE} 次)")
+                if no_change_count >= MAX_NO_CHANGE:
+                    print(f"  ✖ 安全停止: 连续 {MAX_NO_CHANGE} 次补水后秤读数无变化，可能秤异常或管路堵塞")
+                    break
+            else:
+                no_change_count = 0  # 有变化则重置计数
             
-            if current_weight > CONFIG['MAX_WEIGHT_LIMIT']:
-                print(f"警告: 重量超过安全限制 ({current_weight:.2f} > {CONFIG['MAX_WEIGHT_LIMIT']})")
+            # === 安全检查 2: 累计命令水量超限 ===
+            if commanded_water_total > MAX_COMMANDED_WATER:
+                print(f"  ✖ 安全停止: 累计命令补水量 {commanded_water_total:.1f}mL 超过安全上限 {MAX_COMMANDED_WATER:.1f}mL")
                 break
         
         if deficit > 0:
-            print(f"  ⚠ 补水达到最大循环次数 ({CONFIG['MAX_WATER_FILL_ITERATIONS']}), 仍差 {deficit:.2f}g")
+            print(f"  ⚠ 补水未达标 (仍差 {deficit:.2f}g), 累计命令水量: {commanded_water_total:.1f}mL")
         else:
             print(f"  ✓ 补水完成! 总量: {total_added:.2f} g (目标: {target_total:.1f} mL)")
     
