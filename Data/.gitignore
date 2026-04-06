@@ -1,0 +1,5 @@
+# Ignore all generated experiment data in this folder
+*
+
+# Keep this file tracked
+!.gitignore

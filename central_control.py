@@ -34,8 +34,10 @@ AXIS_MAP = {
     'MIX':        'E', # 混匀
 }
 
-# 统一换算比例 (User: 全部用-20step/ML)
-STEPS_PER_ML = -20
+# 通用换算比例（化学品）
+STEPS_PER_ML = -25
+# 补水泵(J轴)换算比例（单独设置）
+WATER_STEPS_PER_ML = -60
 
 # 速度设置 (保持默认值)
 SPEED = {
@@ -52,7 +54,9 @@ CONFIG = {
     'MIX_STEPS': 500,       # 混匀步数
     'WASH_CYCLES': 3,        # 清洗次数
     'MAX_WEIGHT_LIMIT': 140.0, # 电子秤安全限重 (g)
-    'TARGET_TOTAL_VOLUME': 30.0, # 系统液体总量目标 (mL / g)
+    'TARGET_TOTAL_VOLUME_MIN': 28.0, # 系统液体总量下限 (mL / g)
+    'TARGET_TOTAL_VOLUME_MAX': 30.0, # 系统液体总量上限 (mL / g)
+    'TARGET_TOTAL_VOLUME_DEFAULT': 29.0, # 默认补水控制点 (mL / g)
     'WATER_FILL_LARGE_THRESHOLD': 2.0,  # 补水大量阈值 (mL)
     'WATER_FILL_OVERSHOOT': 0.2,        # 最后一步补水过冲量 (mL)
     'MAX_WATER_FILL_ITERATIONS': 30,    # 补水最大循环次数
@@ -66,6 +70,10 @@ CHEMICAL_ORDER = ['NaCl', 'KCl', 'Urea', 'Na_lactate', 'NH4Cl', 'CaCl2', 'Glucos
 def ml_to_steps(ml):
     """固定 -20 steps/mL"""
     return int(ml * STEPS_PER_ML)
+
+def water_ml_to_steps(ml):
+    """补水泵固定 -30 steps/mL"""
+    return int(ml * WATER_STEPS_PER_ML)
 
 def create_output_folder(excel_filename):
     """创建数据保存文件夹"""
@@ -97,7 +105,7 @@ def run_experiment(motor, target_volumes, output_folder, experiment_num):
     
     # --- 2. 清洗工作台 (泵入水 -> 抽出) x Cycles ---
     print(f"\n[Step 2] 清洗工作台 ({CONFIG['WASH_CYCLES']}次)...")
-    steps_wash_water = ml_to_steps(CONFIG['WASH_VOLUME'])
+    steps_wash_water = water_ml_to_steps(CONFIG['WASH_VOLUME'])
     
     for i in range(CONFIG['WASH_CYCLES']):
         print(f"  > Cleaning Cycle {i+1}/{CONFIG['WASH_CYCLES']}")
@@ -153,15 +161,22 @@ def run_experiment(motor, target_volumes, output_folder, experiment_num):
             print(f"警告: 重量超过安全限制 ({current_weight:.2f} > {CONFIG['MAX_WEIGHT_LIMIT']})")
 
     # --- 6.5 根据scale_reader实际读数补水至目标总量 ---
-    target_total = CONFIG['TARGET_TOTAL_VOLUME']
+    target_total_min = CONFIG['TARGET_TOTAL_VOLUME_MIN']
+    target_total_max = CONFIG['TARGET_TOTAL_VOLUME_MAX']
+    target_total_default = CONFIG['TARGET_TOTAL_VOLUME_DEFAULT']
     total_added = current_weight - tare_weight
-    deficit = target_total - total_added
+    deficit = target_total_default - total_added
     mass_records['WATER'] = 0.0
 
-    print(f"\n[Step 6.5] 补水至 {target_total:.1f} mL (当前总量: {total_added:.2f} g, 差值: {deficit:.2f} g)")
+    print(
+        f"\n[Step 6.5] 补水到 {target_total_min:.1f}-{target_total_max:.1f} mL "
+        f"(默认控制点 {target_total_default:.1f} mL, 当前总量: {total_added:.2f} g)"
+    )
 
-    if deficit <= 0:
-        print(f"  当前总量 {total_added:.2f}g 已 >= {target_total:.1f}mL，无需补水")
+    if target_total_min <= total_added <= target_total_max:
+        print(f"  当前总量 {total_added:.2f}g 已在 {target_total_min:.1f}-{target_total_max:.1f}mL 范围内，无需补水")
+    elif total_added > target_total_max:
+        print(f"  当前总量 {total_added:.2f}g 已超过 {target_total_max:.1f}mL，无需补水")
     else:
         iteration = 0
         no_change_count = 0          # 连续无质量变化计数
@@ -171,25 +186,30 @@ def run_experiment(motor, target_volumes, output_folder, experiment_num):
         MAX_ACTUAL_WATER = 40.0      # 实际加入水量安全上限 (g, 基于秤读数)
         MAX_COMMANDED_WATER = 120.0  # 命令补水量安全上限 (mL, 宽松后备保护)
 
-        while deficit > 0 and iteration < CONFIG['MAX_WATER_FILL_ITERATIONS']:
+        while total_added < target_total_min and iteration < CONFIG['MAX_WATER_FILL_ITERATIONS']:
             iteration += 1
+
+            deficit = target_total_default - total_added
             
             # 决定本次补水量：大量差值时一次补大部分，接近目标时小步逼近
             if deficit > CONFIG['WATER_FILL_LARGE_THRESHOLD']:
-                # 差距较大：补到距目标1mL处
-                water_to_add = deficit - 1.0
+                # 差距较大：补到默认控制点附近，但不超过上限范围
+                water_to_add = min(deficit - 1.0, target_total_max - total_added)
             elif deficit > 0.5:
                 # 中等差距：每次0.3mL
                 water_to_add = 0.3
             else:
-                # 接近目标：补 deficit + overshoot，确保从上方越过目标
-                water_to_add = deficit + CONFIG['WATER_FILL_OVERSHOOT']
+                # 接近默认控制点：补一点过冲，确保进入目标范围
+                water_to_add = min(deficit + CONFIG['WATER_FILL_OVERSHOOT'], target_total_max - total_added)
             
             # 确保每次至少加0.1mL以保证进度
             water_to_add = max(water_to_add, 0.1)
+
+            # 防止一次命令就把总量推到上限之外
+            water_to_add = min(water_to_add, max(target_total_max - total_added, 0.1))
             
             print(f"  补水第 {iteration} 次: 计划加入 {water_to_add:.2f} mL...")
-            steps = ml_to_steps(water_to_add)
+            steps = water_ml_to_steps(water_to_add)
             motor.move_axis(AXIS_MAP['WATER'], steps, SPEED['WATER'], wait=True)
             commanded_water_total += water_to_add
             time.sleep(1.5)
@@ -204,8 +224,8 @@ def run_experiment(motor, target_volumes, output_folder, experiment_num):
             
             # 重新计算差值
             total_added = current_weight - tare_weight
-            deficit = target_total - total_added
-            print(f"     实际总量: {total_added:.2f} g, 剩余差值: {deficit:.2f} g")
+            deficit = target_total_default - total_added
+            print(f"     实际总量: {total_added:.2f} g, 当前范围: {target_total_min:.1f}-{target_total_max:.1f} g")
 
             # === 安全检查 1: 连续无质量变化 ===
             actual_change = abs(new_weight - prev_weight)
@@ -228,10 +248,10 @@ def run_experiment(motor, target_volumes, output_folder, experiment_num):
                 print(f"  ✖ 安全停止: 累计命令补水量 {commanded_water_total:.1f}mL 超过安全上限 {MAX_COMMANDED_WATER:.1f}mL")
                 break
         
-        if deficit > 0:
-            print(f"  ⚠ 补水未达标 (仍差 {deficit:.2f}g), 实际加水: {actual_water_total:.1f}g, 命令量: {commanded_water_total:.1f}mL")
+        if not (target_total_min <= total_added <= target_total_max):
+            print(f"  ⚠ 补水未进入目标范围 ({target_total_min:.1f}-{target_total_max:.1f}g), 实际加水: {actual_water_total:.1f}g, 命令量: {commanded_water_total:.1f}mL")
         else:
-            print(f"  ✓ 补水完成! 总量: {total_added:.2f} g (目标: {target_total:.1f} mL)")
+            print(f"  ✓ 补水完成! 总量: {total_added:.2f} g (目标范围: {target_total_min:.1f}-{target_total_max:.1f} mL)")
     
     print(f"  水总计添加质量: {mass_records['WATER']:.4f} g")
 
@@ -248,7 +268,7 @@ def run_experiment(motor, target_volumes, output_folder, experiment_num):
         eis_module.main(
             mass_dict=mass_records,
             target_concentrations=target_volumes,
-            output_folder=None,
+            output_folder=output_folder,
             experiment_num=experiment_num
         )
     except Exception as e:
@@ -261,7 +281,8 @@ def run_experiment(motor, target_volumes, output_folder, experiment_num):
 def main():
     print(f"启动中央控制系统 (Central Control) - 直读体积模式")
     print(f"扫描目录: {EXCEL_FOLDER}")
-    print(f"全局换算比例: {STEPS_PER_ML} steps/mL")
+    print(f"通用换算比例: {STEPS_PER_ML} steps/mL")
+    print(f"补水泵换算比例: {WATER_STEPS_PER_ML} steps/mL")
     
     excel_files = [f for f in os.listdir(EXCEL_FOLDER) if f.endswith('.xlsx') and not f.startswith('~$')]
 

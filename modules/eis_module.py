@@ -121,11 +121,11 @@ def generate_freq_list():
 def format_freq_label(freq):
     """将频率数值格式化为可读标签，用于文件名"""
     if freq >= 1e6:
-        return f"{freq/1e6:.0f}MHz"
+        return f"{freq/1e6:.0f}MHZ"
     elif freq >= 1e3:
-        return f"{freq/1e3:.0f}kHz"
+        return f"{freq/1e3:.0f}kHZ"
     else:
-        return f"{freq:.0f}Hz"
+        return f"{freq:.0f}HZ"
 
 def build_composition_folder_name(mass_dict):
     """根据化学物质组成构建文件夹名"""
@@ -252,14 +252,10 @@ def main(mass_dict=None, target_concentrations=None, output_folder=None, experim
                 info_line = f"✅ Opened: {dev.name} ({dev.serial_number})"
                 print(info_line)
                 f_text.write(info_line + '\n')
-                f_text.write("实际称重质量 (g):\n")
+                f_text.write("Actual measured mass (g):\n")
                 f_text.write(f"  NaCl={mass_dict.get('NaCl', 0):.4f}, KCl={mass_dict.get('KCl', 0):.4f}, Urea={mass_dict.get('Urea', 0):.4f}\n")
                 f_text.write(f"  Lac={mass_dict.get('Na_lactate', 0):.4f}, NH4Cl={mass_dict.get('NH4Cl', 0):.4f}, CaCl2={mass_dict.get('CaCl2', 0):.4f}, Glu={mass_dict.get('Glucose', 0):.4f}\n")
                 f_text.write(f"  Water={mass_dict.get('WATER', 0):.4f}\n")
-                f_text.write("目标体积 (mL):\n")
-                f_text.write(f"  NaCl={target_concentrations.get('NaCl', 0)}, KCl={target_concentrations.get('KCl', 0)}, Urea={target_concentrations.get('Urea', 0)}\n")
-                f_text.write(f"  Lac={target_concentrations.get('Na_lactate', 0)}, NH4Cl={target_concentrations.get('NH4Cl', 0)}, CaCl2={target_concentrations.get('CaCl2', 0)}, Glu={target_concentrations.get('Glucose', 0)}\n")
-                f_text.write(f"  Water={target_concentrations.get('WATER', 0)}\n")
                 f_text.write("-" * 50 + "\n")
                 
                 Z_list = []

@@ -59,3 +59,14 @@
 
 2026-2-22
 1D CNN机器学习框架搭建，完成SOP
+
+2026-4-1
+debug硬件，重装了waveform，目前系统能运行，但是搅拌的空气入口送了需要重新打印
+图片收集有bug
+
+2026-4-6
+填装了所有的试管，修复了Gluclose轴的方向错误
+实验桌面上从左上到右下依次为
+NaCL KCL Urea
+NH4Cl (Glucose) Lactic 
+CaCl2

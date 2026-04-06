@@ -3,7 +3,7 @@ import time
 import re
 from statistics import mean
 
-def open_scale(port='COM5', baudrate=9600, timeout=1):
+def open_scale(port='COM6', baudrate=9600, timeout=1):
     try:
         ser = serial.Serial(
             port=port,
@@ -42,7 +42,7 @@ def read_weight(ser):
         print(f"    读取错误: {e}")
         return None
 
-def wait_for_stable_weight(port='COM5', stable_duration=5, threshold=0.1, timeout=20):
+def wait_for_stable_weight(port='COM6', stable_duration=5, threshold=0.1, timeout=20):
     """
     等待电子秤读数稳定
     参数:
