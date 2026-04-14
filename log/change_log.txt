@@ -70,3 +70,6 @@ debug硬件，重装了waveform，目前系统能运行，但是搅拌的空气�
 NaCL KCL Urea
 NH4Cl (Glucose) Lactic 
 CaCl2
+
+2026-4-14
+修改EIS图像输出
