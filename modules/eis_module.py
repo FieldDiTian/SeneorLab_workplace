@@ -1,5 +1,6 @@
 import sys
 import os
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 import dwfpy as dwf
@@ -10,17 +11,23 @@ import pytz
 SIMULATION_MODE = False
 
 def measure_impedance(device, freq, amp, r_series,
-                      cycles=10, oversample=20, v_range=5.0,
+                      cycles=10, oversample=20, v_range=0.5,
+                      settle_cycles=5,
                       return_waveform=False):
     """
     测量单频阻抗。
-    当 return_waveform=True 时，额外返回时域波形 (t, v_c, i_t)。
+    默认接线假设:
+        CH0 -> 激励端/串联电阻输入端 Vin
+        CH1 -> 样品节点 Vs
+    因此串联电阻电压为 Vr = Vin - Vs，电流为 I = Vr / R_series。
+    当 return_waveform=True 时，额外返回时域波形 (t, v_sample, i_t)。
     """
     scope = device.analog_input
     wavegen = device.analog_output
 
     fs = freq * oversample
-    duration = cycles / freq
+    total_cycles = cycles + settle_cycles
+    duration = total_cycles / freq
 
     wavegen[0].setup(
         "sine",
@@ -30,8 +37,11 @@ def measure_impedance(device, freq, amp, r_series,
         start=True
     )
 
-    for ch in (0, 1):
-        scope[ch].setup(range=v_range)
+    # 给波形发生器一点时间进入稳定输出，避免启动瞬态直接进入记录。
+    time.sleep(min(0.05, max(0.0, 1.0 / fs)))
+
+    scope[0].setup(range=v_range)
+    scope[1].setup(range=v_range)
     recorder = scope.record(
         sample_rate=fs,
         length=duration,
@@ -39,27 +49,27 @@ def measure_impedance(device, freq, amp, r_series,
         start=True
     )
 
-    wavegen[0].setup(
-        "sine",
-        frequency=freq,
-        amplitude=amp,
-        offset=amp,
-        start=False
-    )
+    v_in = np.array(recorder.channels[0].data_samples)
+    v_sample = np.array(recorder.channels[1].data_samples)
+    n_discard = min(len(v_in) // 2, int(round(settle_cycles * oversample)))
+    if n_discard > 0:
+        v_in = v_in[n_discard:]
+        v_sample = v_sample[n_discard:]
 
-    v_r = np.array(recorder.channels[0].data_samples)
-    v_c = np.array(recorder.channels[1].data_samples)
+    v_r = v_in - v_sample
     N = len(v_r)
     t = np.arange(N) / fs
 
     i_t = v_r / r_series
-    ph_v = np.sum(v_c * np.exp(-1j * 2 * np.pi * freq * t)) / N
-    ph_i = np.sum(i_t * np.exp(-1j * 2 * np.pi * freq * t)) / N
+    v_sample_ac = v_sample - np.mean(v_sample)
+    i_t_ac = i_t - np.mean(i_t)
+    ph_v = np.sum(v_sample_ac * np.exp(-1j * 2 * np.pi * freq * t)) / N
+    ph_i = np.sum(i_t_ac * np.exp(-1j * 2 * np.pi * freq * t)) / N
 
     Z = ph_v / ph_i
 
     if return_waveform:
-        return Z, t, v_c, i_t
+        return Z, t, v_sample, i_t
     return Z
 
 def plot_impedance(freqs, Z_list, save_dir, base_filename):
@@ -127,6 +137,14 @@ def format_freq_label(freq):
     else:
         return f"{freq:.0f}HZ"
 
+
+def build_waveform_filename(freq):
+    """
+    为时域图生成带数值前缀的文件名，便于资源管理器按频率从小到大排序。
+    例如: UI_0000001HZ_1HZ.png, UI_0001000HZ_1kHZ.png
+    """
+    return f"UI_{int(round(freq)):07d}HZ_{format_freq_label(freq)}.png"
+
 def build_composition_folder_name(mass_dict):
     """根据化学物质组成构建文件夹名"""
     parts = []
@@ -140,53 +158,60 @@ def build_composition_folder_name(mass_dict):
     parts.append(f"Water_{mass_dict.get('WATER', 0):.4f}g")
     return "_".join(parts)
 
-def plot_time_domain(waveform_data, save_dir):
+def plot_time_domain(waveform_data, save_dir, oversample=80, cycles=30):
     """
-    绘制每个频率点的 V(t) 和 i(t) 波形图，分开保存。
-    waveform_data: list of (freq, t, v_c, i_t) 元组
-    每个频率生成两张图：V_频率.png 和 I_频率.png
+        绘制每个频率点的 U(t) 和 I(t) 合并波形图。
+        物理定义:
+            - V(t): 样品两端电压 v_sample (CH1)
+            - I(t): 串联电阻推算电流 i_t = (Vin - Vs) / R_series
+    waveform_data: list of (freq, t, v_sample, i_t) 元组
+    每个频率生成一张图：UI_频率.png
     """
     for freq, t, v_c, i_t in waveform_data:
-        # 只显示前5个周期
-        samples_per_cycle = int(len(t) / (len(t) * freq / (len(t) / (freq * 20))) ) if freq > 0 else len(t)
-        n_show = min(len(t), int(5 * 20))  # 5个周期 × oversample(20)
-        if n_show < 10 or n_show > len(t):
-            n_show = len(t)
+        # 显示最后 5 个稳态周期，而不是起始瞬态。
+        n_show = min(len(t), 5 * oversample)
+        start_idx = max(0, len(t) - n_show)
+
+        # 计算统计信息
+        v_c_rms = np.sqrt(np.mean(v_c**2))
+        v_c_peak = np.max(np.abs(v_c))
+        i_t_rms = np.sqrt(np.mean(i_t**2))
+        i_t_peak = np.max(np.abs(i_t))
 
         # 根据频率选择合适的时间单位
-        total_time = t[n_show - 1] if n_show > 0 else t[-1]
+        t_window = t[start_idx:start_idx + n_show] - t[start_idx]
+        total_time = t_window[-1] if n_show > 0 else t[-1]
         if total_time < 1e-3:
-            t_plot = t[:n_show] * 1e6
+            t_plot = t_window * 1e6
             t_unit = 'μs'
         elif total_time < 1:
-            t_plot = t[:n_show] * 1e3
+            t_plot = t_window * 1e3
             t_unit = 'ms'
         else:
-            t_plot = t[:n_show]
+            t_plot = t_window
             t_unit = 's'
 
         freq_label = format_freq_label(freq)
 
-        # --- V(t) 图 ---
-        fig, ax = plt.subplots(figsize=(8, 4))
-        ax.plot(t_plot, v_c[:n_show], color='#1f77b4', linewidth=0.8)
-        ax.set_xlabel(f'Time ({t_unit})')
-        ax.set_ylabel('Voltage (V)')
-        ax.set_title(f'V(t) @ {freq_label}')
-        ax.grid(True, alpha=0.3)
-        fig.tight_layout()
-        fig.savefig(os.path.join(save_dir, f"V_{freq_label}.png"), dpi=300)
-        plt.close(fig)
+        i_plot_ua = i_t[start_idx:start_idx + n_show] * 1e6
+        fig, (ax_v, ax_i) = plt.subplots(
+            2, 1, figsize=(10, 8), sharex=True,
+            gridspec_kw={'hspace': 0.28}
+        )
 
-        # --- I(t) 图 ---
-        fig, ax = plt.subplots(figsize=(8, 4))
-        ax.plot(t_plot, i_t[:n_show] * 1e3, color='#d62728', linewidth=0.8)
-        ax.set_xlabel(f'Time ({t_unit})')
-        ax.set_ylabel('Current (mA)')
-        ax.set_title(f'I(t) @ {freq_label}')
-        ax.grid(True, alpha=0.3)
-        fig.tight_layout()
-        fig.savefig(os.path.join(save_dir, f"I_{freq_label}.png"), dpi=300)
+        ax_v.plot(t_plot, v_c[start_idx:start_idx + n_show], color='#1f77b4', linewidth=0.8)
+        ax_v.set_ylabel('Voltage (V)')
+        ax_v.set_title(f'U(t) Sample @ {freq_label} [CH1, steady-state]\nRMS={v_c_rms:.4f}V, Peak={v_c_peak:.4f}V')
+        ax_v.grid(True, alpha=0.3)
+
+        ax_i.plot(t_plot, i_plot_ua, color='#d62728', linewidth=0.8)
+        ax_i.set_xlabel(f'Time ({t_unit})')
+        ax_i.set_ylabel('Current (uA)')
+        ax_i.set_title(f'I(t) @ {freq_label} [(CH0-CH1)/Rs, steady-state]\nRMS={i_t_rms*1e6:.2f}uA, Peak={i_t_peak*1e6:.2f}uA')
+        ax_i.grid(True, alpha=0.3)
+
+        fig.tight_layout(h_pad=2.0)
+        fig.savefig(os.path.join(save_dir, build_waveform_filename(freq)), dpi=300)
         plt.close(fig)
 
 def main(mass_dict=None, target_concentrations=None, output_folder=None, experiment_num=None):
@@ -212,7 +237,7 @@ def main(mass_dict=None, target_concentrations=None, output_folder=None, experim
     amplitude = 0.5
     r_series = 1e3
     cycles = 30
-    oversample = 20
+    oversample = 80
     
     # 构建文件夹: Data/化学物质组成/    (或 output_folder/化学物质组成/)
     composition_name = build_composition_folder_name(mass_dict)
@@ -278,8 +303,8 @@ def main(mass_dict=None, target_concentrations=None, output_folder=None, experim
                     print(line)
 
         if waveform_data:
-            plot_time_domain(waveform_data, save_dir)
-            print(f"    ✓ Saved {len(waveform_data) * 2} waveform plots (V & I)")
+            plot_time_domain(waveform_data, save_dir, oversample=oversample, cycles=cycles)
+            print(f"    ✓ Saved {len(waveform_data)} combined waveform plots (U & I)")
         print(f"    ✓ Measurement complete!")
         return Z_list
 
