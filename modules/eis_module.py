@@ -134,6 +134,31 @@ def build_representative_cycle(t, y, freq, oversample, num_cycles=5):
     y_seg = y[start_idx:start_idx + n_show]
     return phase_aligned_average_cycle(t_seg, y_seg, freq, oversample)
 
+
+def build_fundamental_cycle(t, y, freq, oversample, num_cycles=5):
+    """
+    从末尾若干个周期估计基波相量，只保留 1x 基波，生成标准正弦单周期。
+    用于电压显示，避免把噪声/高次谐波带进 U(t) 参考图。
+    """
+    samples_per_cycle = int(round(oversample))
+    if samples_per_cycle <= 0 or len(y) < samples_per_cycle:
+        y_ac = y - np.mean(y)
+        if len(y_ac) == 0:
+            return y_ac
+        t_local = np.arange(len(y_ac)) / max(freq * oversample, 1.0)
+        coeff = (2.0 / len(y_ac)) * np.sum(y_ac * np.exp(-1j * 2 * np.pi * freq * t_local))
+        return np.real(coeff * np.exp(1j * 2 * np.pi * freq * t_local))
+
+    n_show = min(len(y), num_cycles * samples_per_cycle)
+    n_show = (n_show // samples_per_cycle) * samples_per_cycle
+    start_idx = max(0, len(y) - n_show)
+    t_seg = t[start_idx:start_idx + n_show]
+    y_seg = y[start_idx:start_idx + n_show]
+    y_ac = y_seg - np.mean(y_seg)
+    coeff = (2.0 / len(y_ac)) * np.sum(y_ac * np.exp(-1j * 2 * np.pi * freq * t_seg))
+    phase_grid = np.arange(samples_per_cycle) / samples_per_cycle
+    return np.real(coeff * np.exp(1j * 2 * np.pi * phase_grid))
+
 def measure_impedance(device, freq, amp, r_series,
                       cycles=10, oversample=20, v_range=0.5,
                       settle_cycles=5,
@@ -284,27 +309,41 @@ def build_composition_folder_name(mass_dict):
 
 def plot_time_domain(waveform_data, save_dir, oversample=80, cycles=30):
     """
-        绘制每个频率点的 U(t) 和 I(t) 合并波形图。
+        绘制每个频率点的 U(t) 和 I(t) 对照图。
         物理定义:
             - V(t): 样品两端电压 v_sample (CH1)
             - I(t): 串联电阻推算电流 i_t = (Vin - Vs) / R_series
     waveform_data: list of (freq, t, v_sample, i_t, harmonic_info) 元组
-    每个频率生成一张图：UI_频率.png
+    每个频率生成一张图：左侧原始真实5周期，右侧上图为电压基波正弦，右侧下图为电流谐波分析
     """
     for freq, t, v_c, i_t, harmonic_info in waveform_data:
-        representative_v = build_representative_cycle(t, v_c, freq, oversample, num_cycles=5)
+        n_show = min(len(t), 5 * oversample)
+        n_show = (n_show // oversample) * oversample
+        if n_show == 0:
+            continue
+        start_idx = max(0, len(t) - n_show)
+
+        representative_v = build_fundamental_cycle(t, v_c, freq, oversample, num_cycles=5)
         representative_i = build_representative_cycle(t, i_t, freq, oversample, num_cycles=5)
         if len(representative_v) == 0 or len(representative_i) == 0:
             continue
 
-        # 所有显示统计量都基于同一份代表性单周期，保证与谐波文件一致。
+        # 左侧显示原始真实波形，右侧上图显示电压基波正弦，右侧下图显示电流谐波分析波形。
+        raw_v = v_c[start_idx:start_idx + n_show]
+        raw_i = i_t[start_idx:start_idx + n_show]
+        raw_v_rms = np.sqrt(np.mean(raw_v**2))
+        raw_v_peak = np.max(np.abs(raw_v))
+        raw_i_rms = np.sqrt(np.mean(raw_i**2))
+        raw_i_peak = np.max(np.abs(raw_i))
+
+        # 右侧所有统计量都基于同一份代表性单周期，保证与谐波文件一致。
         v_c_rms = np.sqrt(np.mean(representative_v**2))
         v_c_peak = np.max(np.abs(representative_v))
         i_t_rms = np.sqrt(np.mean(representative_i**2))
         i_t_peak = np.max(np.abs(representative_i))
 
         # 根据频率选择合适的时间单位
-        t_window = np.arange(len(representative_v) * 5) / (freq * oversample)
+        t_window = np.arange(n_show) / (freq * oversample)
         total_time = t_window[-1] if len(t_window) > 0 else 0.0
         if total_time < 1e-3:
             t_plot = t_window * 1e6
@@ -320,24 +359,42 @@ def plot_time_domain(waveform_data, save_dir, oversample=80, cycles=30):
 
         v_plot = np.tile(representative_v, 5)
         i_plot_ua = np.tile(representative_i, 5) * 1e6
-        fig, (ax_v, ax_i) = plt.subplots(
-            2, 1, figsize=(10, 8), sharex=True,
-            gridspec_kw={'hspace': 0.28}
+        raw_i_plot_ua = raw_i * 1e6
+
+        fig, axes = plt.subplots(
+            2, 2, figsize=(14, 8), sharex='col',
+            gridspec_kw={'hspace': 0.28, 'wspace': 0.22}
         )
+        ax_v_raw, ax_v_rep = axes[0]
+        ax_i_raw, ax_i_rep = axes[1]
 
-        ax_v.plot(t_plot, v_plot, color='#1f77b4', linewidth=0.9)
-        ax_v.set_ylabel('Voltage (V)')
-        ax_v.set_title(f'U(t) Sample @ {freq_label} [CH1, cycle-averaged]\nRMS={v_c_rms:.4f}V, Peak={v_c_peak:.4f}V')
-        ax_v.grid(True, alpha=0.3)
+        ax_v_raw.plot(t_plot, raw_v, color='#1f77b4', linewidth=0.9)
+        ax_v_raw.set_ylabel('Voltage (V)')
+        ax_v_raw.set_title(f'U(t) Raw @ {freq_label}\nRMS={raw_v_rms:.4f}V, Peak={raw_v_peak:.4f}V')
+        ax_v_raw.grid(True, alpha=0.3)
 
-        ax_i.plot(t_plot, i_plot_ua, color='#d62728', linewidth=0.9)
-        ax_i.set_xlabel(f'Time ({t_unit})')
-        ax_i.set_ylabel('Current (uA)')
-        ax_i.set_title(
-            f'I(t) @ {freq_label} [(CH0-CH1)/Rs, cycle-averaged]\n'
+        ax_i_raw.plot(t_plot, raw_i_plot_ua, color='#d62728', linewidth=0.9)
+        ax_i_raw.set_xlabel(f'Time ({t_unit})')
+        ax_i_raw.set_ylabel('Current (uA)')
+        ax_i_raw.set_title(
+            f'I(t) Raw @ {freq_label}\n'
+            f'RMS={raw_i_rms*1e6:.2f}uA, Peak={raw_i_peak*1e6:.2f}uA'
+        )
+        ax_i_raw.grid(True, alpha=0.3)
+
+        ax_v_rep.plot(t_plot, v_plot, color='#1f77b4', linewidth=0.9)
+        ax_v_rep.set_ylabel('Voltage (V)')
+        ax_v_rep.set_title(f'U(t) Fundamental Sine @ {freq_label}\nRMS={v_c_rms:.4f}V, Peak={v_c_peak:.4f}V')
+        ax_v_rep.grid(True, alpha=0.3)
+
+        ax_i_rep.plot(t_plot, i_plot_ua, color='#d62728', linewidth=0.9)
+        ax_i_rep.set_xlabel(f'Time ({t_unit})')
+        ax_i_rep.set_ylabel('Current (uA)')
+        ax_i_rep.set_title(
+            f'I(t) Harmonic Basis @ {freq_label}\n'
             f'RMS={i_t_rms*1e6:.2f}uA, Peak={i_t_peak*1e6:.2f}uA, THD={harmonic_info["thd_pct"]:.2f}%'
         )
-        ax_i.grid(True, alpha=0.3)
+        ax_i_rep.grid(True, alpha=0.3)
 
         fig.tight_layout(h_pad=2.0)
         fig.savefig(os.path.join(save_dir, build_waveform_filename(freq)), dpi=300)
@@ -363,7 +420,7 @@ def main(mass_dict=None, target_concentrations=None, output_folder=None, experim
     # 使用线性decade频率列表: 1-10, 10-100, ..., 100k-1M
     freqs = generate_freq_list()
 
-    amplitude = 0.5
+    amplitude = 1.0
     r_series = 1e3
     cycles = 30
     oversample = 80
